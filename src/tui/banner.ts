@@ -2,10 +2,9 @@
 // Inspired by llmfit TUI: Clean monochromatic block typography with slate accents.
 
 import type { AppState } from '../app/types.js';
+import { getAppVersion } from '../app/version.js';
 import { colors, rgbColor, getSpinnerChar } from './colors.js';
 import { padEndVisual, visualLength } from './layout.js';
-
-export const VERSION = 'v0.1.0';
 
 // Prominent, clean 4-line block ASCII logo
 export const BANNER_LINES = [
@@ -21,7 +20,7 @@ export interface BannerOptions {
   spinnerTick?: number;
 }
 
-export function renderBanner(width: number = 120): string[] {
+export function renderBanner(width: number = 120, version?: string): string[] {
   const whiteCode = '1;37'; // Bold white
   const safeWidth = Math.max(10, width - 2);
   const lines: string[] = [];
@@ -30,7 +29,8 @@ export function renderBanner(width: number = 120): string[] {
   lines.push(padEndVisual('', safeWidth));
 
   // 2. 4-line block ASCII logo with version adjacent to the top right of logo text
-  const vBadge = `\x1B[1;37m${VERSION}\x1B[0m`;
+  const currentVersion = version || getAppVersion();
+  const vBadge = `\x1B[1;37m${currentVersion}\x1B[0m`;
 
   for (let i = 0; i < BANNER_LINES.length; i++) {
     const raw = BANNER_LINES[i];

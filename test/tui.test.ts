@@ -116,14 +116,21 @@ describe('TUI Components & Engine', () => {
   });
 
   describe('Monochromatic Banner & Stats Rendering', () => {
-    it('renders blank line above logo and adjacent version tag on top line', () => {
+    it('renders blank line above logo and adjacent version tag on top line', async () => {
+      const { getAppVersion } = await import('../src/app/version.js');
+      const version = getAppVersion();
+      expect(version).toMatch(/^v\d+$/);
+
       const banner = renderBanner(120);
       expect(banner).toHaveLength(5);
       // Line 0 is blank padding above logo
       expect(stripAnsi(banner[0]).trim()).toBe('');
       // Line 1 contains logo block and adjacent version
       expect(stripAnsi(banner[1])).toContain('██████╗');
-      expect(stripAnsi(banner[1])).toContain('v0.1.0');
+      expect(stripAnsi(banner[1])).toContain(version);
+
+      const explicitBanner = renderBanner(120, 'v42');
+      expect(stripAnsi(explicitBanner[1])).toContain('v42');
     });
 
     it('renders compact stats bar directly below logo with counts and user', () => {
@@ -166,20 +173,44 @@ describe('TUI Components & Engine', () => {
 
       const lines = renderTable({ prs, selectedIndex: 0, width: 100, height: 10 });
       expect(stripAnsi(lines[0])).toContain('STATUS');
+      expect(stripAnsi(lines[0])).toContain('REV');
       expect(stripAnsi(lines[0])).toContain('REPO');
-      expect(stripAnsi(lines[1])).toContain('Ready');
-      expect(stripAnsi(lines[1])).toContain('billing');
-      expect(stripAnsi(lines[1])).toContain('#142');
+      expect(stripAnsi(lines[1])).toContain('MewsSystems');
+      expect(stripAnsi(lines[2])).toContain('Ready');
+      expect(stripAnsi(lines[2])).toContain('billing');
+      expect(stripAnsi(lines[2])).toContain('#142');
     });
 
-    it('renders details modal for selected PR with borders and scroll hints', () => {
-      const pr = createMockPR(142, 'Ready');
-      const lines = renderDetails(pr, 70, 15);
+    it('renders multiple organization headers separating different owners', () => {
+      const pr1 = createMockPR(142, 'Ready');
+      const pr2 = createMockPR(1, 'Reviewing');
+      pr2.key = { owner: 'zepedrosilva', repo: 'overseer', number: 1 };
+      pr2.title = 'feat: initial release';
 
-      expect(lines).toHaveLength(15);
+      const lines = renderTable({
+        prs: [pr1, pr2],
+        selectedIndex: 0,
+        width: 100,
+        height: 10,
+        currentUser: 'zepedrosilva',
+      });
+
+      const fullText = lines.map(stripAnsi).join('\n');
+      expect(fullText).toContain('🏢 MewsSystems (1)');
+      expect(fullText).toContain('👤 zepedrosilva (1)');
+      expect(fullText).toContain('billing');
+      expect(fullText).toContain('overseer');
+    });
+
+    it('renders details modal for selected PR with borders, reviewers roster, and scroll hints', () => {
+      const pr = createMockPR(142, 'Ready');
+      const lines = renderDetails(pr, 70, 20);
+
+      expect(lines).toHaveLength(20);
       const fullText = lines.map(stripAnsi).join('\n');
       expect(fullText).toContain('PR Details: MewsSystems/billing#142');
       expect(fullText).toContain('Review: APPROVED');
+      expect(fullText).toContain('Reviewers & Approvals');
       expect(fullText).toContain('CI Checks (2)');
       expect(fullText).toContain('unit-tests');
       expect(fullText).toContain('Activity & Logs');

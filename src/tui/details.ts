@@ -93,6 +93,31 @@ export function renderDetailsModal(options: RenderDetailsModalOptions): string[]
 
   contentLines.push(`\x1B[${dimBorder}${'─'.repeat(innerWidth)}\x1B[0m`);
 
+  // Reviewers & Approvals Section
+  const reqStr = pr.requiredApprovalsCount && pr.requiredApprovalsCount > 0
+    ? `${pr.requiredApprovalsCount} required`
+    : 'None configured';
+  contentLines.push(`\x1B[${rgbColor(colors.cyan)}Reviewers & Approvals (${reqStr}):\x1B[0m`);
+
+  let hasReviewers = false;
+  if (pr.approvedReviewers && pr.approvedReviewers.length > 0) {
+    hasReviewers = true;
+    contentLines.push(`  \x1B[${rgbColor(colors.green)}✔ Approved:\x1B[0m ${pr.approvedReviewers.map(u => `@${u}`).join(', ')}`);
+  }
+  if (pr.changesRequestedReviewers && pr.changesRequestedReviewers.length > 0) {
+    hasReviewers = true;
+    contentLines.push(`  \x1B[${rgbColor(colors.red)}✖ Changes Requested:\x1B[0m ${pr.changesRequestedReviewers.map(u => `@${u}`).join(', ')}`);
+  }
+  if (pr.requestedReviewers && pr.requestedReviewers.length > 0) {
+    hasReviewers = true;
+    contentLines.push(`  \x1B[${rgbColor(colors.yellow)}⏳ Pending:\x1B[0m ${pr.requestedReviewers.map(u => `@${u}`).join(', ')}`);
+  }
+  if (!hasReviewers) {
+    contentLines.push(`  \x1B[${rgbColor(colors.fgMuted)}(No reviewers assigned or requested)\x1B[0m`);
+  }
+
+  contentLines.push(`\x1B[${dimBorder}${'─'.repeat(innerWidth)}\x1B[0m`);
+
   // CI Checks Section
   if (pr.ciChecks && pr.ciChecks.length > 0) {
     contentLines.push(`\x1B[${rgbColor(colors.cyan)}CI Checks (${pr.ciChecks.length}):\x1B[0m`);

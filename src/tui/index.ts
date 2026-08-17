@@ -207,6 +207,7 @@ export function createTUI(
       selectedIndex: selectedRow,
       width: layout.width,
       height: layout.bodyHeight,
+      currentUser: data.currentUser,
       workers: data.workers,
       spinnerTick,
     });

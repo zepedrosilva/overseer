@@ -3,6 +3,7 @@ import {
   evaluateReviewVerdict,
   evaluateCiStatus,
   evaluateOverallStatus,
+  formatReviewBadge,
 } from '../src/watcher/evaluator.js';
 import type { CiCheckRun } from '../src/app/types.js';
 
@@ -187,6 +188,69 @@ describe('PR Status Evaluator', () => {
         ciStatus: 'SUCCESS',
       });
       expect(res.overallStatus).toBe('Reviewing');
+    });
+  });
+
+  describe('formatReviewBadge', () => {
+    it('formats approved state when meeting required count', () => {
+      const badge = formatReviewBadge({
+        approvedCount: 2,
+        requiredApprovalsCount: 2,
+        pendingReviewersCount: 0,
+      });
+      expect(badge.text).toBe('✔ 2/2');
+      expect(badge.kind).toBe('approved');
+    });
+
+    it('formats pending state with required approvals and pending reviewers without extra emoji space', () => {
+      const badge = formatReviewBadge({
+        approvedCount: 1,
+        requiredApprovalsCount: 2,
+        pendingReviewersCount: 1,
+      });
+      expect(badge.text).toBe('⏳1/2 (1 pend)');
+      expect(badge.kind).toBe('pending');
+    });
+
+    it('formats changes requested with required approvals and pending reviewers', () => {
+      const badge = formatReviewBadge({
+        approvedCount: 0,
+        requiredApprovalsCount: 2,
+        pendingReviewersCount: 1,
+        reviewVerdict: 'CHANGES_REQUESTED',
+      });
+      expect(badge.text).toBe('✖ 0/2 (1 pend)');
+      expect(badge.kind).toBe('changes_requested');
+    });
+
+    it('formats unconfigured rule PR with single approval', () => {
+      const badge = formatReviewBadge({
+        approvedCount: 1,
+        requiredApprovalsCount: 0,
+        pendingReviewersCount: 0,
+      });
+      expect(badge.text).toBe('✔ 1');
+      expect(badge.kind).toBe('approved');
+    });
+
+    it('formats unconfigured rule PR with pending reviewers', () => {
+      const badge = formatReviewBadge({
+        approvedCount: 0,
+        requiredApprovalsCount: 0,
+        pendingReviewersCount: 1,
+      });
+      expect(badge.text).toBe('⏳0 (1 pend)');
+      expect(badge.kind).toBe('pending');
+    });
+
+    it('formats unconfigured rule PR with no reviews or requests', () => {
+      const badge = formatReviewBadge({
+        approvedCount: 0,
+        requiredApprovalsCount: 0,
+        pendingReviewersCount: 0,
+      });
+      expect(badge.text).toBe('—');
+      expect(badge.kind).toBe('none');
     });
   });
 });
