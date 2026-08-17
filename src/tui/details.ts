@@ -1,6 +1,6 @@
 import type { PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { colors, rgbColor, statusColor, statusIcon, ciIcon, ciColor } from './colors.js';
+import { colors, rgbColor, statusColor, statusIcon, ciIcon, ciColor, getSpinnerChar } from './colors.js';
 import { padEndVisual, truncateVisual, visualLength } from './layout.js';
 
 export function renderDetails(
@@ -24,10 +24,11 @@ export interface RenderDetailsModalOptions {
   modalWidth: number;
   modalHeight: number;
   scrollOffset?: number;
+  spinnerTick?: number;
 }
 
 export function renderDetailsModal(options: RenderDetailsModalOptions): string[] {
-  const { pr, modalWidth, modalHeight, scrollOffset = 0 } = options;
+  const { pr, modalWidth, modalHeight, scrollOffset = 0, spinnerTick = 0 } = options;
   const lines: string[] = [];
   const innerWidth = Math.max(6, modalWidth - 4); // 2 chars for borders, 2 chars for padding
   const innerHeight = Math.max(4, modalHeight - 2); // 2 chars for top & bottom borders
@@ -128,7 +129,7 @@ export function renderDetailsModal(options: RenderDetailsModalOptions): string[]
         icon = '✗';
         cHex = colors.red;
       } else if (check.status === 'IN_PROGRESS' || check.status === 'QUEUED') {
-        icon = '◌';
+        icon = getSpinnerChar(spinnerTick);
         cHex = colors.yellow;
       }
       const details = check.url ? ` \x1B[${rgbColor(colors.fgDim)}(${check.url})\x1B[0m` : '';

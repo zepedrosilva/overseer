@@ -202,6 +202,24 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('overseer');
     });
 
+    it('renders animated spinner in CI column when CI check runs are pending', async () => {
+      const { ciIcon, getSpinnerChar } = await import('../src/tui/colors.js');
+      expect(ciIcon('PENDING', 2)).toBe(getSpinnerChar(2));
+
+      const pr = createMockPR(142, 'CiPending');
+      pr.ciStatus = 'PENDING';
+      const lines = renderTable({
+        prs: [pr],
+        selectedIndex: 0,
+        width: 100,
+        height: 5,
+        spinnerTick: 3,
+      });
+
+      const rowText = stripAnsi(lines[2]);
+      expect(rowText).toContain(getSpinnerChar(3));
+    });
+
     it('renders details modal for selected PR with borders, reviewers roster, and scroll hints', () => {
       const pr = createMockPR(142, 'Ready');
       const lines = renderDetails(pr, 70, 20);

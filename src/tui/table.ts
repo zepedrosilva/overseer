@@ -165,7 +165,7 @@ export function renderTable(options: RenderTableOptions): string[] {
     const sc = isWorkerRunning
       ? rgbColor(colors.yellow)
       : rgbColor(statusColor(pr.overallStatus));
-    const cIcon = ciIcon(pr.ciStatus);
+    const cIcon = ciIcon(pr.ciStatus, options.spinnerTick);
     const cc = rgbColor(ciColor(pr.ciStatus));
 
     // Format REV review badge

@@ -59,9 +59,11 @@ export function createTUI(
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
 
-  // Live animation ticker (100ms) for spinner during active GitHub GraphQL polls
+  // Live animation ticker (100ms) for spinners during polling, active CI workflows, and worker runs
   const animationTimer = setInterval(() => {
-    if (data.isPolling || Array.from(data.workers.values()).some((w) => w.status === 'running')) {
+    const hasRunningWorkers = Array.from(data.workers.values()).some((w) => w.status === 'running');
+    const hasPendingCi = Array.from(data.prs.values()).some((pr) => pr.ciStatus === 'PENDING');
+    if (data.isPolling || hasRunningWorkers || hasPendingCi || diffLoading) {
       spinnerTick = (spinnerTick + 1) % 1000;
       render();
     }
@@ -244,6 +246,7 @@ export function createTUI(
         modalWidth,
         modalHeight,
         scrollOffset: detailsScrollOffset,
+        spinnerTick,
       });
 
       const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));

@@ -87,14 +87,14 @@ export function statusIcon(status: PrOverallStatus): string {
   }
 }
 
-export function ciIcon(status: CiStatus): string {
+export function ciIcon(status: CiStatus, spinnerTick: number = 0): string {
   switch (status) {
     case 'SUCCESS':
       return '✓';
     case 'FAILURE':
       return '✗';
     case 'PENDING':
-      return '◌';
+      return getSpinnerChar(spinnerTick);
     case 'UNKNOWN':
     default:
       return '·';
