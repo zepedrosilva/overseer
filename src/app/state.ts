@@ -243,7 +243,7 @@ export function appStateToAppConfig(data: AppState): AppConfig {
       filter_user_only: data.settings.filterUserOnly,
       search_query: data.settings.searchQuery,
     },
-    repos: data.repos.map((r) => ({ url: r.url, agent: r.agent })),
+    repos: [],
     agents: { ...data.customAgents },
     runtime: {
       dryRun: data.dryRun,

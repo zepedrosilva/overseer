@@ -99,7 +99,7 @@ export async function pollAllRepos(
   };
 
   const seenPrKeys = new Set<string>();
-  const isSearchMode = Boolean(config.defaults.search_query) || (config.repos.length === 0 && data.repos.length === 0);
+  const isSearchMode = Boolean(config.defaults.search_query) || config.repos.length === 0;
 
   try {
     if (isSearchMode) {
