@@ -138,7 +138,8 @@ describe('Agent Logs Modal & Table Worker Indicators', () => {
         spinnerTick: 2,
       });
 
-      const rowText = stripAnsi(lines[1]);
+      expect(stripAnsi(lines[1])).toContain('acme-corp');
+      const rowText = stripAnsi(lines[2]);
       expect(rowText).toContain('claude');
       expect(rowText).toContain('billing');
       expect(rowText).toContain('#142');
