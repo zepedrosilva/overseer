@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Test & Coverage
+coverage/
+*.lcov
+
+# Local overseer state, cache, and worktrees
+.overseer/
+
+# Local config (project-specific)
+config.toml
+
+# Global config
+.config/
+
+# OS files
+.DS_Store
+Thumbs.db

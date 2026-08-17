@@ -1,0 +1,246 @@
+// ── GitHub CLI Wrapper ──────────────────────────────────────────────────────
+// High-performance interface to GitHub via official `gh` CLI.
+
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+export interface GitHubPRFallback {
+  number: number;
+  title: string;
+  html_url: string;
+  head: { ref: string; sha: string };
+  base: { ref: string; sha: string };
+  state: 'open' | 'closed';
+  draft: boolean;
+  created_at: string;
+  updated_at: string;
+  comments: number;
+}
+
+export async function isGHAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync('gh', ['--version']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function isGHAuthenticated(): Promise<boolean> {
+  try {
+    await execFileAsync('gh', ['auth', 'status']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getCurrentUser(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('gh', ['api', 'user', '--jq', '.login']);
+    return stdout.trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+function executeGraphQL<T = Record<string, unknown>>(
+  query: string,
+  variables?: Record<string, unknown>
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const payload = JSON.stringify({
+      query,
+      variables: variables || {},
+    });
+
+    const child = spawn('gh', ['api', 'graphql', '--input', '-'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(`gh api graphql failed (code ${code}): ${stderr || stdout}`));
+      }
+
+      try {
+        const parsed = JSON.parse(stdout) as T;
+        resolve(parsed);
+      } catch (err) {
+        reject(new Error(`Failed to parse GraphQL response: ${(err as Error).message}\nRaw: ${stdout}`));
+      }
+    });
+
+    child.on('error', (err) => {
+      reject(new Error(`Failed to spawn gh: ${err.message}`));
+    });
+
+    child.stdin.write(payload);
+    child.stdin.end();
+  });
+}
+
+export async function runGraphQL<T = Record<string, unknown>>(
+  query: string,
+  variables?: Record<string, unknown>,
+  retries: number = 2
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      return await executeGraphQL<T>(query, variables);
+    } catch (err) {
+      if (attempt >= retries) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+  }
+}
+
+export async function listOpenPRs(owner: string, repo: string): Promise<GitHubPRFallback[]> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr', 'list',
+    '--repo', `${owner}/${repo}`,
+    '--state', 'open',
+    '--json', 'number,title,state,headRefName,baseRefName,comments,isDraft,createdAt,updatedAt,url',
+    '--limit', '50',
+  ]);
+
+  if (!stdout.trim()) return [];
+
+  const parsed = JSON.parse(stdout) as Array<{
+    number: number;
+    title: string;
+    state: string;
+    headRefName: string;
+    baseRefName: string;
+    comments: number;
+    isDraft: boolean;
+    createdAt: string;
+    updatedAt: string;
+    url: string;
+  }>;
+
+  return parsed.map((p) => ({
+    number: p.number,
+    title: p.title,
+    html_url: p.url,
+    head: { ref: p.headRefName, sha: '' },
+    base: { ref: p.baseRefName, sha: '' },
+    state: p.state.toLowerCase() === 'open' ? 'open' : 'closed',
+    draft: p.isDraft,
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+    comments: p.comments || 0,
+  }));
+}
+
+export async function mergePR(
+  owner: string,
+  repo: string,
+  number: number,
+  deleteBranch: boolean = true
+): Promise<string> {
+  const args = [
+    'pr', 'merge', String(number),
+    '--repo', `${owner}/${repo}`,
+    '--squash',
+  ];
+
+  if (deleteBranch) {
+    args.push('--delete-branch');
+  }
+
+  const { stdout } = await execFileAsync('gh', args);
+  return stdout.trim();
+}
+
+export async function addComment(
+  owner: string,
+  repo: string,
+  number: number,
+  body: string
+): Promise<string> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr', 'comment', String(number),
+    '--repo', `${owner}/${repo}`,
+    '--body', body,
+  ]);
+  return stdout.trim();
+}
+
+export async function closePR(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr', 'close', String(number),
+    '--repo', `${owner}/${repo}`,
+  ]);
+  return stdout.trim();
+}
+
+export async function openInBrowser(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr', 'view', String(number),
+    '--repo', `${owner}/${repo}`,
+    '--web',
+  ]);
+  return stdout.trim();
+}
+
+export async function getPRDiff(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr', 'diff', String(number),
+    '--repo', `${owner}/${repo}`,
+  ]);
+  return stdout;
+}
+
+export async function viewPRDiffInteractive(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn('gh', ['pr', 'diff', String(number), '--repo', `${owner}/${repo}`], {
+      stdio: 'inherit',
+    });
+
+    child.on('close', (code) => {
+      if (code === 0 || code === 130) {
+        resolve();
+      } else {
+        reject(new Error(`gh pr diff exited with code ${code}`));
+      }
+    });
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
