@@ -87,8 +87,18 @@ export function createTUI(
 
   function getFilteredPRs(): PrState[] {
     const list = Array.from(data.prs.values());
-    // Sort: attention first (ChangesRequested, CiFailing), then Ready, then others
-    list.sort((a, b) => {
+    const filtered = filterPRs(list, searchQuery);
+
+    // Group & Sort:
+    // 1. Group by organization (owner) sorted strictly alphabetically by name
+    // 2. Within each org: attention first (ChangesRequested, CiFailing), then Ready, then others, then updatedAt desc
+    filtered.sort((a, b) => {
+      const ownerA = (a.key.owner || '').toLowerCase();
+      const ownerB = (b.key.owner || '').toLowerCase();
+      if (ownerA !== ownerB) {
+        return ownerA.localeCompare(ownerB, undefined, { sensitivity: 'base' });
+      }
+
       const priority = (pr: PrState) => {
         if (pr.overallStatus === 'ChangesRequested' || pr.overallStatus === 'CiFailing') return 0;
         if (pr.overallStatus === 'Ready') return 1;
@@ -101,7 +111,7 @@ export function createTUI(
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
 
-    return filterPRs(list, searchQuery);
+    return filtered;
   }
 
   function getSelectedPR(): PrState | null {

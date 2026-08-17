@@ -105,9 +105,14 @@ export function renderTable(options: RenderTableOptions): string[] {
     groupsMap.get(owner)!.push({ pr, originalIndex: idx });
   });
 
-  // 2. Build flat list of visual items (headers + PR rows)
+  // 2. Build flat list of visual items (headers + PR rows) with organizations sorted alphabetically by name
+  const sortedOwners = Array.from(groupsMap.keys()).sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' })
+  );
+
   const items: TableItem[] = [];
-  for (const [owner, groupPrs] of groupsMap.entries()) {
+  for (const owner of sortedOwners) {
+    const groupPrs = groupsMap.get(owner)!;
     items.push({ type: 'header', owner, count: groupPrs.length });
     for (const item of groupPrs) {
       items.push({ type: 'pr', pr: item.pr, originalIndex: item.originalIndex });

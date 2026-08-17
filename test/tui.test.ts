@@ -202,6 +202,37 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('overseer');
     });
 
+    it('correctly selects and displays the last PR of an organization before crossing to the next', () => {
+      const mews1 = createMockPR(101, 'Ready');
+      const mews2 = createMockPR(102, 'Ready');
+      const zepedro = createMockPR(1, 'Ready');
+      zepedro.key = { owner: 'zepedrosilva', repo: 'overseer', number: 1 };
+
+      const prs = [mews1, mews2, zepedro];
+
+      // Select index 1 (the last PR of MewsSystems)
+      const lines = renderTable({
+        prs,
+        selectedIndex: 1,
+        width: 100,
+        height: 10,
+      });
+
+      // Line 0: Header
+      // Line 1: 🏢 MewsSystems (2)
+      // Line 2: Mews #101
+      // Line 3: ▎ Mews #102 (selected marker)
+      // Line 4: 🏢 zepedrosilva (1)
+      // Line 5: zepedro #1
+      expect(stripAnsi(lines[1])).toContain('MewsSystems');
+      expect(stripAnsi(lines[2])).toContain('#101');
+      expect(stripAnsi(lines[3])).toContain('#102');
+      expect(lines[3]).toContain('▎'); // Has cyan selection marker on the last PR of Mews!
+      expect(stripAnsi(lines[4])).toContain('zepedrosilva');
+      expect(stripAnsi(lines[5])).toContain('#1');
+      expect(lines[5]).not.toContain('▎');
+    });
+
     it('renders animated spinner in CI column when CI check runs are pending', async () => {
       const { ciIcon, getSpinnerChar } = await import('../src/tui/colors.js');
       expect(ciIcon('PENDING', 2)).toBe(getSpinnerChar(2));
