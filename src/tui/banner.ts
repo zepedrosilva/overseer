@@ -38,7 +38,7 @@ export function renderBanner(width: number = 120, version?: string): string[] {
 
     if (i === 0) {
       // Position version badge directly adjacent to top-right of logo
-      lines.push(padEndVisual(`${coloredLogo}  ${vBadge}`, safeWidth));
+      lines.push(padEndVisual(`${coloredLogo} ${vBadge}`, safeWidth));
     } else {
       lines.push(padEndVisual(coloredLogo, safeWidth));
     }
