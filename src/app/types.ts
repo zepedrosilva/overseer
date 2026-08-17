@@ -103,6 +103,12 @@ export interface PrState {
   agent?: string;                // per-repo or per-PR agent override
   commentsCount: number;
   unresolvedThreadsCount: number;
+  approvedCount?: number;
+  requiredApprovalsCount?: number;
+  pendingReviewersCount?: number;
+  requestedReviewers?: string[];
+  approvedReviewers?: string[];
+  changesRequestedReviewers?: string[];
   createdAt: string;
   updatedAt: string;
   log: string[];

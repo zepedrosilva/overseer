@@ -40,6 +40,12 @@ fragment RepoPullRequests on Repository {
       state
       headRefName
       baseRefName
+      baseRef {
+        name
+        branchProtectionRule {
+          requiredApprovingReviewCount
+        }
+      }
       author {
         login
       }
@@ -122,6 +128,12 @@ export function buildSearchPRQuery(searchQuery: string, prLimit: number = 50): s
         state
         headRefName
         baseRefName
+        baseRef {
+          name
+          branchProtectionRule {
+            requiredApprovingReviewCount
+          }
+        }
         repository {
           name
           owner {
@@ -345,6 +357,36 @@ export function parsePrNode(
     checksCount: ciChecks.length,
   });
 
+  // Extract branch protection required approvals count
+  const baseRefObj = rawPr.baseRef as {
+    branchProtectionRule?: { requiredApprovingReviewCount?: number | null };
+  } | undefined;
+  const requiredApprovalsCount =
+    typeof baseRefObj?.branchProtectionRule?.requiredApprovingReviewCount === 'number'
+      ? baseRefObj.branchProtectionRule.requiredApprovingReviewCount
+      : 0;
+
+  // Determine latest review status per unique author
+  const latestReviewByAuthor = new Map<string, string>();
+  for (const rev of reviewsList) {
+    if (rev.author) {
+      latestReviewByAuthor.set(rev.author.toLowerCase(), rev.state);
+    }
+  }
+
+  const approvedReviewers: string[] = [];
+  const changesRequestedReviewers: string[] = [];
+  for (const [auth, authState] of latestReviewByAuthor.entries()) {
+    if (authState === 'APPROVED') {
+      approvedReviewers.push(auth);
+    } else if (authState === 'CHANGES_REQUESTED') {
+      changesRequestedReviewers.push(auth);
+    }
+  }
+
+  const approvedCount = approvedReviewers.length;
+  const pendingReviewersCount = requestedReviewersList.length;
+
   return {
     key: {
       owner,
@@ -366,6 +408,12 @@ export function parsePrNode(
     agent: repoFallback.agent,
     commentsCount,
     unresolvedThreadsCount,
+    approvedCount,
+    requiredApprovalsCount,
+    pendingReviewersCount,
+    requestedReviewers: requestedReviewersList,
+    approvedReviewers,
+    changesRequestedReviewers,
     createdAt,
     updatedAt,
     log: [],

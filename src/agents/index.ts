@@ -123,11 +123,19 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   appendLog(data, pr.key, `Dispatching agent '${agentName}'...`);
   appendLog(data, pr.key, `Command: ${command}`);
 
-  // 4. Spawn Agent CLI Process in worktree directory
+  // 4. Spawn Agent CLI Process in worktree directory with headless isolation
   const child = spawn(command, {
     shell: true,
     cwd: worktreePath,
+    detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      CI: '1',
+      TERM: 'dumb',
+      NO_COLOR: '1',
+      FORCE_COLOR: '0',
+    },
   });
 
   const worker: WorkerHandle = {

@@ -59,9 +59,11 @@ export function createTUI(
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
 
-  // Live animation ticker (100ms) for spinner during active GitHub GraphQL polls
+  // Live animation ticker (100ms) for spinners during polling, active CI workflows, and worker runs
   const animationTimer = setInterval(() => {
-    if (data.isPolling || Array.from(data.workers.values()).some((w) => w.status === 'running')) {
+    const hasRunningWorkers = Array.from(data.workers.values()).some((w) => w.status === 'running');
+    const hasPendingCi = Array.from(data.prs.values()).some((pr) => pr.ciStatus === 'PENDING');
+    if (data.isPolling || hasRunningWorkers || hasPendingCi || diffLoading) {
       spinnerTick = (spinnerTick + 1) % 1000;
       render();
     }
@@ -85,8 +87,18 @@ export function createTUI(
 
   function getFilteredPRs(): PrState[] {
     const list = Array.from(data.prs.values());
-    // Sort: attention first (ChangesRequested, CiFailing), then Ready, then others
-    list.sort((a, b) => {
+    const filtered = filterPRs(list, searchQuery);
+
+    // Group & Sort:
+    // 1. Group by organization (owner) sorted strictly alphabetically by name
+    // 2. Within each org: attention first (ChangesRequested, CiFailing), then Ready, then others, then updatedAt desc
+    filtered.sort((a, b) => {
+      const ownerA = (a.key.owner || '').toLowerCase();
+      const ownerB = (b.key.owner || '').toLowerCase();
+      if (ownerA !== ownerB) {
+        return ownerA.localeCompare(ownerB, undefined, { sensitivity: 'base' });
+      }
+
       const priority = (pr: PrState) => {
         if (pr.overallStatus === 'ChangesRequested' || pr.overallStatus === 'CiFailing') return 0;
         if (pr.overallStatus === 'Ready') return 1;
@@ -99,7 +111,7 @@ export function createTUI(
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
 
-    return filterPRs(list, searchQuery);
+    return filtered;
   }
 
   function getSelectedPR(): PrState | null {
@@ -167,197 +179,203 @@ export function createTUI(
   }
 
   function render(): void {
-    enterAltScreen();
+    try {
+      enterAltScreen();
 
-    const layout = calculateLayout(process.stdout.columns, process.stdout.rows);
-    const filteredPRs = getFilteredPRs();
+      const layout = calculateLayout(process.stdout.columns, process.stdout.rows);
+      const filteredPRs = getFilteredPRs();
 
-    if (filteredPRs.length > 0) {
-      selectedRow = Math.max(0, Math.min(filteredPRs.length - 1, selectedRow));
-    } else {
-      selectedRow = 0;
-    }
-
-    const selectedPR = getSelectedPR();
-    availableAgents = getAvailableAgents(data);
-
-    const allLines: string[] = [];
-
-    // 1. Monochromatic Large ASCII Banner (blank line on top + logo + version adjacent top-right)
-    const bannerLines = renderBanner(layout.width);
-    allLines.push(...bannerLines);
-
-    // 2. Compact 1-line metadata bar below logo
-    allLines.push(
-      renderStatsBar(data, layout.width, {
-        streamDeckEnabled: data.extensions?.streamdeck?.enabled ?? options?.streamDeckEnabled,
-        streamDeckPort: data.extensions?.streamdeck?.port ?? options?.streamDeckPort,
-        spinnerTick,
-      })
-    );
-
-    // 3. Divider & Search Bar
-    allLines.push(renderDivider(layout.width));
-    allLines.push(renderSearchBar(searchQuery, footerMode === 'SEARCH', Math.max(10, layout.width - 2)));
-    allLines.push(renderDivider(layout.width));
-
-    // 4. Main Body Table (Full width) with live worker spinner badges
-    const tableLines = renderTable({
-      prs: filteredPRs,
-      selectedIndex: selectedRow,
-      width: layout.width,
-      height: layout.bodyHeight,
-      workers: data.workers,
-      spinnerTick,
-    });
-    for (let i = 0; i < layout.bodyHeight; i++) {
-      allLines.push(tableLines[i] || padEndVisual('', layout.width));
-    }
-
-    // 5. Divider & Footer
-    allLines.push(renderDivider(layout.width));
-
-    const currentChosenAgent = availableAgents[selectedAgentIndex] || (selectedPR ? getRepoAgent(data, selectedPR.key) : data.settings?.defaultAgent) || 'claude';
-
-    const footerContext: FooterContext = {
-      mode: footerMode,
-      selectedPR,
-      inputBuffer,
-      selectedAgent: currentChosenAgent,
-      availableAgents,
-      message: statusMessage,
-    };
-    allLines.push(renderFooter(footerContext, Math.max(10, layout.width - 2)));
-
-    // 6. Details Pop-up Modal Overlay (if open)
-    // Anchored directly over the PR table body (below the banner & search bar)
-    if (isDetailsModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen) {
-      const headerOffset = bannerLines.length + 4; // stats(1) + div(1) + search(1) + div(1) = 9 lines
-      const modalHeight = Math.max(6, layout.bodyHeight);
-      const isSmallScreen = layout.width < 90;
-      const widthRatio = isSmallScreen ? 0.96 : 0.90;
-      const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
-
-      const modalLines = renderDetailsModal({
-        pr: selectedPR,
-        modalWidth,
-        modalHeight,
-        scrollOffset: detailsScrollOffset,
-      });
-
-      const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
-      const leftPad = ' '.repeat(xStart);
-      const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
-
-      for (let r = 0; r < modalLines.length; r++) {
-        const lineIdx = headerOffset + r;
-        if (lineIdx < allLines.length - 2) {
-          allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
-        }
+      if (filteredPRs.length > 0) {
+        selectedRow = Math.max(0, Math.min(filteredPRs.length - 1, selectedRow));
+      } else {
+        selectedRow = 0;
       }
-    }
 
-    // 7. Settings Pop-up Modal Overlay (if open)
-    if (isSettingsModalOpen) {
-      const headerOffset = bannerLines.length + 4;
-      const modalHeight = Math.max(8, layout.bodyHeight);
-      const isSmallScreen = layout.width < 90;
-      const widthRatio = isSmallScreen ? 0.96 : 0.90;
-      const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+      const selectedPR = getSelectedPR();
+      availableAgents = getAvailableAgents(data);
 
-      const modalLines = renderSettingsModal({
-        state: data,
-        selectedIndex: settingsIndex,
-        isEditingText: isEditingSetting,
-        editBuffer: settingInputBuffer,
-        modalWidth,
-        modalHeight,
-      });
+      const allLines: string[] = [];
 
-      const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
-      const leftPad = ' '.repeat(xStart);
-      const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+      // 1. Monochromatic Large ASCII Banner (blank line on top + logo + version adjacent top-right)
+      const bannerLines = renderBanner(layout.width);
+      allLines.push(...bannerLines);
 
-      for (let r = 0; r < modalLines.length; r++) {
-        const lineIdx = headerOffset + r;
-        if (lineIdx < allLines.length - 2) {
-          allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
-        }
-      }
-    }
+      // 2. Compact 1-line metadata bar below logo
+      allLines.push(
+        renderStatsBar(data, layout.width, {
+          streamDeckEnabled: data.extensions?.streamdeck?.enabled ?? options?.streamDeckEnabled,
+          streamDeckPort: data.extensions?.streamdeck?.port ?? options?.streamDeckPort,
+          spinnerTick,
+        })
+      );
 
-    // 8. Diff Pop-up Modal Overlay (if open)
-    if (isDiffModalOpen && selectedPR && !isSettingsModalOpen && !isLogsModalOpen) {
-      const headerOffset = bannerLines.length + 4;
-      const modalHeight = Math.max(6, layout.bodyHeight);
-      const isSmallScreen = layout.width < 90;
-      const widthRatio = isSmallScreen ? 0.96 : 0.90;
-      const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+      // 3. Divider & Search Bar
+      allLines.push(renderDivider(layout.width));
+      allLines.push(renderSearchBar(searchQuery, footerMode === 'SEARCH', Math.max(10, layout.width - 2)));
+      allLines.push(renderDivider(layout.width));
 
-      const modalLines = renderDiffModal({
-        pr: selectedPR,
-        diffText: diffContent,
-        isLoading: diffLoading,
-        modalWidth,
-        modalHeight,
-        scrollOffset: diffScrollOffset,
+      // 4. Main Body Table (Full width) with live worker spinner badges
+      const tableLines = renderTable({
+        prs: filteredPRs,
+        selectedIndex: selectedRow,
+        width: layout.width,
+        height: layout.bodyHeight,
+        currentUser: data.currentUser,
+        workers: data.workers,
         spinnerTick,
       });
+      for (let i = 0; i < layout.bodyHeight; i++) {
+        allLines.push(tableLines[i] || padEndVisual('', layout.width));
+      }
 
-      const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
-      const leftPad = ' '.repeat(xStart);
-      const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+      // 5. Divider & Footer
+      allLines.push(renderDivider(layout.width));
 
-      for (let r = 0; r < modalLines.length; r++) {
-        const lineIdx = headerOffset + r;
-        if (lineIdx < allLines.length - 2) {
-          allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+      const currentChosenAgent = availableAgents[selectedAgentIndex] || (selectedPR ? getRepoAgent(data, selectedPR.key) : data.settings?.defaultAgent) || 'claude';
+
+      const footerContext: FooterContext = {
+        mode: footerMode,
+        selectedPR,
+        inputBuffer,
+        selectedAgent: currentChosenAgent,
+        availableAgents,
+        message: statusMessage,
+      };
+      allLines.push(renderFooter(footerContext, Math.max(10, layout.width - 2)));
+
+      // 6. Details Pop-up Modal Overlay (if open)
+      // Anchored directly over the PR table body (below the banner & search bar)
+      if (isDetailsModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen) {
+        const headerOffset = bannerLines.length + 4; // stats(1) + div(1) + search(1) + div(1) = 9 lines
+        const modalHeight = Math.max(6, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+
+        const modalLines = renderDetailsModal({
+          pr: selectedPR,
+          modalWidth,
+          modalHeight,
+          scrollOffset: detailsScrollOffset,
+          spinnerTick,
+        });
+
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
         }
       }
-    }
 
-    // 9. Logs Pop-up Modal Overlay (if open)
-    if (isLogsModalOpen && selectedPR && !isSettingsModalOpen) {
-      const headerOffset = bannerLines.length + 4;
-      const modalHeight = Math.max(6, layout.bodyHeight);
-      const isSmallScreen = layout.width < 90;
-      const widthRatio = isSmallScreen ? 0.96 : 0.90;
-      const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+      // 7. Settings Pop-up Modal Overlay (if open)
+      if (isSettingsModalOpen) {
+        const headerOffset = bannerLines.length + 4;
+        const modalHeight = Math.max(8, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
-      const worker = data.workers?.get(prKeyToString(selectedPR.key)) || null;
-      const logLines = loadPRLogFile(selectedPR);
+        const modalLines = renderSettingsModal({
+          state: data,
+          selectedIndex: settingsIndex,
+          isEditingText: isEditingSetting,
+          editBuffer: settingInputBuffer,
+          modalWidth,
+          modalHeight,
+        });
 
-      const modalLines = renderLogsModal({
-        pr: selectedPR,
-        worker,
-        logLines,
-        modalWidth,
-        modalHeight,
-        scrollOffset: logsScrollOffset,
-        spinnerTick,
-      });
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
 
-      const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
-      const leftPad = ' '.repeat(xStart);
-      const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
-
-      for (let r = 0; r < modalLines.length; r++) {
-        const lineIdx = headerOffset + r;
-        if (lineIdx < allLines.length - 2) {
-          allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
         }
       }
-    }
 
-    // Assemble buffer: strictly bounded to layout.height to prevent terminal auto-scroll / top logo cutoff
-    let buffer = '\x1B[H\x1B[?25l';
-    const linesToOutput = allLines.slice(0, layout.height);
-    for (let i = 0; i < linesToOutput.length; i++) {
-      buffer += linesToOutput[i] + '\x1B[K' + (i < linesToOutput.length - 1 ? '\n' : '');
-    }
-    buffer += '\x1B[J';
+      // 8. Diff Pop-up Modal Overlay (if open)
+      if (isDiffModalOpen && selectedPR && !isSettingsModalOpen && !isLogsModalOpen) {
+        const headerOffset = bannerLines.length + 4;
+        const modalHeight = Math.max(6, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
-    process.stdout.write(buffer);
+        const modalLines = renderDiffModal({
+          pr: selectedPR,
+          diffText: diffContent,
+          isLoading: diffLoading,
+          modalWidth,
+          modalHeight,
+          scrollOffset: diffScrollOffset,
+          spinnerTick,
+        });
+
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
+        }
+      }
+
+      // 9. Logs Pop-up Modal Overlay (if open)
+      if (isLogsModalOpen && selectedPR && !isSettingsModalOpen) {
+        const headerOffset = bannerLines.length + 4;
+        const modalHeight = Math.max(6, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+
+        const worker = data.workers?.get(prKeyToString(selectedPR.key)) || null;
+        const logLines = loadPRLogFile(selectedPR);
+
+        const modalLines = renderLogsModal({
+          pr: selectedPR,
+          worker,
+          logLines,
+          modalWidth,
+          modalHeight,
+          scrollOffset: logsScrollOffset,
+          spinnerTick,
+        });
+
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
+        }
+      }
+
+      // Assemble buffer: strictly bounded to layout.height to prevent terminal auto-scroll / top logo cutoff
+      let buffer = '\x1B[H\x1B[?25l';
+      const linesToOutput = allLines.slice(0, layout.height);
+      for (let i = 0; i < linesToOutput.length; i++) {
+        buffer += linesToOutput[i] + '\x1B[K' + (i < linesToOutput.length - 1 ? '\n' : '');
+      }
+      buffer += '\x1B[J';
+
+      process.stdout.write(buffer);
+    } catch {
+      // Prevent render errors from interrupting event loop
+    }
   }
 
   // Handle terminal window resize
