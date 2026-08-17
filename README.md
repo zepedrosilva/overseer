@@ -42,7 +42,7 @@
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                        │
-│  ██████╗  ██╗   ██╗ ███████╗ ██████╗  ███████╗ ███████╗ ███████╗ ██████╗   v0.1.0                      │
+│  ██████╗  ██╗   ██╗ ███████╗ ██████╗  ███████╗ ███████╗ ███████╗ ██████╗  v3                           │
 │ ██╔═══██╗ ██║   ██║ ██╔════╝ ██╔══██╗ ██╔════╝ ██╔════╝ ██╔════╝ ██╔══██╗                             │
 │ ██║   ██║ ╚██╗ ██╔╝ █████╗   ██████╔╝ ███████╗ █████╗   █████╗   ██████╔╝                             │
 │ ╚██████╔╝  ╚████╔╝  ███████╗ ██║  ██╗ ╚════██║ ███████╗ ███████╗ ██║  ██╗                             │
@@ -50,11 +50,13 @@
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  › Filter PRs (press / to search)                                                                      │
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  STATUS    CI   REPO           #     BRANCH             TITLE                                AGE       │
-│► 🟢 Ready   ✔   billing       #142  fix/inv-rounding   fix: resolve invoice balance round…  1h        │
-│  🔴 Needs   ✖   meridian      #88   feat/stripe-v3     feat: upgrade stripe payment flow    3h        │
-│  🟡 Revw    ⏳   knowledge     #12   docs/api-guide     docs: update webhook architecture    1d        │
-│  ⚪ Draft   -   atlas-blocks  #305  wip/grid-layout    feat: new interactive grid renderer  2d        │
+│  REPO           #     BRANCH             TITLE                               STATUS    CI   REV      AGE   │
+│── 🏢 acme-corp (3) ──────────────────────────────────────────────────────────────────────────────────│
+│▎ billing       #142  fix/inv-rounding   fix: resolve invoice balance round… 🟢 Ready   ✔   ✔ 2/2    1h    │
+│  meridian      #88   feat/stripe-v3     feat: upgrade stripe payment flow   🔴 Needs   ✖   ✖ 0/1    3h    │
+│  knowledge     #12   docs/api-guide     docs: update webhook architecture   🟡 Revw    ⏳   ⏳1/2    1d    │
+│── 👤 zepedrosilva (1) ─────────────────────────────────────────────────────────────────────────────────│
+│  overseer      #1    feat/initial-code… feat: Overseer v0.1.0 initial rele… 🟢 Ready   ✔   ✔ 1      10m   │
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  [Enter]details  [s]settings  [o]open  [m]merge  [a]agent  [c]comment  [d]diff  [x]close  [R]recheck  [q]  │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────┘

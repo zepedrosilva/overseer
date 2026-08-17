@@ -116,14 +116,21 @@ describe('TUI Components & Engine', () => {
   });
 
   describe('Monochromatic Banner & Stats Rendering', () => {
-    it('renders blank line above logo and adjacent version tag on top line', () => {
+    it('renders blank line above logo and adjacent version tag on top line', async () => {
+      const { getAppVersion } = await import('../src/app/version.js');
+      const version = getAppVersion();
+      expect(version).toMatch(/^v\d+$/);
+
       const banner = renderBanner(120);
       expect(banner).toHaveLength(5);
       // Line 0 is blank padding above logo
       expect(stripAnsi(banner[0]).trim()).toBe('');
       // Line 1 contains logo block and adjacent version
       expect(stripAnsi(banner[1])).toContain('██████╗');
-      expect(stripAnsi(banner[1])).toContain('v0.1.0');
+      expect(stripAnsi(banner[1])).toContain(version);
+
+      const explicitBanner = renderBanner(120, 'v42');
+      expect(stripAnsi(explicitBanner[1])).toContain('v42');
     });
 
     it('renders compact stats bar directly below logo with counts and user', () => {
@@ -166,20 +173,93 @@ describe('TUI Components & Engine', () => {
 
       const lines = renderTable({ prs, selectedIndex: 0, width: 100, height: 10 });
       expect(stripAnsi(lines[0])).toContain('STATUS');
+      expect(stripAnsi(lines[0])).toContain('REV');
       expect(stripAnsi(lines[0])).toContain('REPO');
-      expect(stripAnsi(lines[1])).toContain('Ready');
-      expect(stripAnsi(lines[1])).toContain('billing');
-      expect(stripAnsi(lines[1])).toContain('#142');
+      expect(stripAnsi(lines[1])).toContain('acme-corp');
+      expect(stripAnsi(lines[2])).toContain('Ready');
+      expect(stripAnsi(lines[2])).toContain('billing');
+      expect(stripAnsi(lines[2])).toContain('#142');
     });
 
-    it('renders details modal for selected PR with borders and scroll hints', () => {
-      const pr = createMockPR(142, 'Ready');
-      const lines = renderDetails(pr, 70, 15);
+    it('renders multiple organization headers separating different owners', () => {
+      const pr1 = createMockPR(142, 'Ready');
+      const pr2 = createMockPR(1, 'Reviewing');
+      pr2.key = { owner: 'zepedrosilva', repo: 'overseer', number: 1 };
+      pr2.title = 'feat: initial release';
 
-      expect(lines).toHaveLength(15);
+      const lines = renderTable({
+        prs: [pr1, pr2],
+        selectedIndex: 0,
+        width: 100,
+        height: 10,
+        currentUser: 'zepedrosilva',
+      });
+
+      const fullText = lines.map(stripAnsi).join('\n');
+      expect(fullText).toContain('🏢 acme-corp (1)');
+      expect(fullText).toContain('👤 zepedrosilva (1)');
+      expect(fullText).toContain('billing');
+      expect(fullText).toContain('overseer');
+    });
+
+    it('correctly selects and displays the last PR of an organization before crossing to the next', () => {
+      const mews1 = createMockPR(101, 'Ready');
+      const mews2 = createMockPR(102, 'Ready');
+      const zepedro = createMockPR(1, 'Ready');
+      zepedro.key = { owner: 'zepedrosilva', repo: 'overseer', number: 1 };
+
+      const prs = [mews1, mews2, zepedro];
+
+      // Select index 1 (the last PR of acme-corp)
+      const lines = renderTable({
+        prs,
+        selectedIndex: 1,
+        width: 100,
+        height: 10,
+      });
+
+      // Line 0: Header
+      // Line 1: 🏢 acme-corp (2)
+      // Line 2: Mews #101
+      // Line 3: ▎ Mews #102 (selected marker)
+      // Line 4: 🏢 zepedrosilva (1)
+      // Line 5: zepedro #1
+      expect(stripAnsi(lines[1])).toContain('acme-corp');
+      expect(stripAnsi(lines[2])).toContain('#101');
+      expect(stripAnsi(lines[3])).toContain('#102');
+      expect(lines[3]).toContain('▎'); // Has cyan selection marker on the last PR of Mews!
+      expect(stripAnsi(lines[4])).toContain('zepedrosilva');
+      expect(stripAnsi(lines[5])).toContain('#1');
+      expect(lines[5]).not.toContain('▎');
+    });
+
+    it('renders animated spinner in CI column when CI check runs are pending', async () => {
+      const { ciIcon, getSpinnerChar } = await import('../src/tui/colors.js');
+      expect(ciIcon('PENDING', 2)).toBe(getSpinnerChar(2));
+
+      const pr = createMockPR(142, 'CiPending');
+      pr.ciStatus = 'PENDING';
+      const lines = renderTable({
+        prs: [pr],
+        selectedIndex: 0,
+        width: 100,
+        height: 5,
+        spinnerTick: 3,
+      });
+
+      const rowText = stripAnsi(lines[2]);
+      expect(rowText).toContain(getSpinnerChar(3));
+    });
+
+    it('renders details modal for selected PR with borders, reviewers roster, and scroll hints', () => {
+      const pr = createMockPR(142, 'Ready');
+      const lines = renderDetails(pr, 70, 20);
+
+      expect(lines).toHaveLength(20);
       const fullText = lines.map(stripAnsi).join('\n');
       expect(fullText).toContain('PR Details: acme-corp/billing#142');
       expect(fullText).toContain('Review: APPROVED');
+      expect(fullText).toContain('Reviewers & Approvals');
       expect(fullText).toContain('CI Checks (2)');
       expect(fullText).toContain('unit-tests');
       expect(fullText).toContain('Activity & Logs');

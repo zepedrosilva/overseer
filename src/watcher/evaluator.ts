@@ -6,6 +6,7 @@ import type {
   CiStatus,
   PrOverallStatus,
   CiCheckRun,
+  PrState,
 } from '../app/types.js';
 
 export interface RawReview {
@@ -187,5 +188,69 @@ export function evaluateOverallStatus(input: EvaluationInput): EvaluationResult 
   return {
     overallStatus: 'Reviewing',
     statusDetail: 'Awaiting review',
+  };
+}
+
+export interface ReviewBadgeResult {
+  text: string;
+  kind: 'approved' | 'changes_requested' | 'pending' | 'none';
+}
+
+export function formatReviewBadge(pr: Partial<PrState>): ReviewBadgeResult {
+  const approved = pr.approvedCount ?? (pr.reviewVerdict === 'APPROVED' ? 1 : 0);
+  const required = pr.requiredApprovalsCount ?? 0;
+  const pending = pr.pendingReviewersCount ?? 0;
+  const isChangesRequested =
+    pr.reviewVerdict === 'CHANGES_REQUESTED' ||
+    (Boolean(pr.changesRequestedReviewers && pr.changesRequestedReviewers.length > 0));
+
+  if (required > 0) {
+    if (approved >= required) {
+      return {
+        text: `✔ ${approved}/${required}`,
+        kind: 'approved',
+      };
+    }
+    if (isChangesRequested) {
+      const pendStr = pending > 0 ? ` (${pending} pend)` : '';
+      return {
+        text: `✖ ${approved}/${required}${pendStr}`,
+        kind: 'changes_requested',
+      };
+    }
+    const pendStr = pending > 0 ? ` (${pending} pend)` : '';
+    return {
+      text: `⏳${approved}/${required}${pendStr}`,
+      kind: 'pending',
+    };
+  }
+
+  // No explicit branch protection rule (required === 0)
+  if (isChangesRequested) {
+    const pendStr = pending > 0 ? ` (${pending} pend)` : '';
+    return {
+      text: `✖ ${approved}${pendStr}`,
+      kind: 'changes_requested',
+    };
+  }
+
+  if (approved > 0) {
+    const pendStr = pending > 0 ? ` (${pending} pend)` : '';
+    return {
+      text: `✔ ${approved}${pendStr}`,
+      kind: 'approved',
+    };
+  }
+
+  if (pending > 0) {
+    return {
+      text: `⏳0 (${pending} pend)`,
+      kind: 'pending',
+    };
+  }
+
+  return {
+    text: '—',
+    kind: 'none',
   };
 }

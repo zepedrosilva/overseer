@@ -1,6 +1,6 @@
 import type { PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { colors, rgbColor, statusColor, statusIcon, ciIcon, ciColor } from './colors.js';
+import { colors, rgbColor, statusColor, statusIcon, ciIcon, ciColor, getSpinnerChar } from './colors.js';
 import { padEndVisual, truncateVisual, visualLength } from './layout.js';
 
 export function renderDetails(
@@ -24,10 +24,11 @@ export interface RenderDetailsModalOptions {
   modalWidth: number;
   modalHeight: number;
   scrollOffset?: number;
+  spinnerTick?: number;
 }
 
 export function renderDetailsModal(options: RenderDetailsModalOptions): string[] {
-  const { pr, modalWidth, modalHeight, scrollOffset = 0 } = options;
+  const { pr, modalWidth, modalHeight, scrollOffset = 0, spinnerTick = 0 } = options;
   const lines: string[] = [];
   const innerWidth = Math.max(6, modalWidth - 4); // 2 chars for borders, 2 chars for padding
   const innerHeight = Math.max(4, modalHeight - 2); // 2 chars for top & bottom borders
@@ -93,6 +94,31 @@ export function renderDetailsModal(options: RenderDetailsModalOptions): string[]
 
   contentLines.push(`\x1B[${dimBorder}${'─'.repeat(innerWidth)}\x1B[0m`);
 
+  // Reviewers & Approvals Section
+  const reqStr = pr.requiredApprovalsCount && pr.requiredApprovalsCount > 0
+    ? `${pr.requiredApprovalsCount} required`
+    : 'None configured';
+  contentLines.push(`\x1B[${rgbColor(colors.cyan)}Reviewers & Approvals (${reqStr}):\x1B[0m`);
+
+  let hasReviewers = false;
+  if (pr.approvedReviewers && pr.approvedReviewers.length > 0) {
+    hasReviewers = true;
+    contentLines.push(`  \x1B[${rgbColor(colors.green)}✔ Approved:\x1B[0m ${pr.approvedReviewers.map(u => `@${u}`).join(', ')}`);
+  }
+  if (pr.changesRequestedReviewers && pr.changesRequestedReviewers.length > 0) {
+    hasReviewers = true;
+    contentLines.push(`  \x1B[${rgbColor(colors.red)}✖ Changes Requested:\x1B[0m ${pr.changesRequestedReviewers.map(u => `@${u}`).join(', ')}`);
+  }
+  if (pr.requestedReviewers && pr.requestedReviewers.length > 0) {
+    hasReviewers = true;
+    contentLines.push(`  \x1B[${rgbColor(colors.yellow)}⏳ Pending:\x1B[0m ${pr.requestedReviewers.map(u => `@${u}`).join(', ')}`);
+  }
+  if (!hasReviewers) {
+    contentLines.push(`  \x1B[${rgbColor(colors.fgMuted)}(No reviewers assigned or requested)\x1B[0m`);
+  }
+
+  contentLines.push(`\x1B[${dimBorder}${'─'.repeat(innerWidth)}\x1B[0m`);
+
   // CI Checks Section
   if (pr.ciChecks && pr.ciChecks.length > 0) {
     contentLines.push(`\x1B[${rgbColor(colors.cyan)}CI Checks (${pr.ciChecks.length}):\x1B[0m`);
@@ -103,7 +129,7 @@ export function renderDetailsModal(options: RenderDetailsModalOptions): string[]
         icon = '✗';
         cHex = colors.red;
       } else if (check.status === 'IN_PROGRESS' || check.status === 'QUEUED') {
-        icon = '◌';
+        icon = getSpinnerChar(spinnerTick);
         cHex = colors.yellow;
       }
       const details = check.url ? ` \x1B[${rgbColor(colors.fgDim)}(${check.url})\x1B[0m` : '';
