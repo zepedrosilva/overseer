@@ -30,15 +30,19 @@ export function renderBanner(width: number = 120, version?: string): string[] {
 
   // 2. 4-line block ASCII logo with version adjacent to the top right of logo text
   const currentVersion = version || getAppVersion();
-  const vBadge = `\x1B[1;37m${currentVersion}\x1B[0m`;
+  const numPart = currentVersion.replace(/^[vV]/, '');
+  const hasV = /^[vV]/.test(currentVersion);
+  const vBadge = hasV
+    ? `\x1B[${rgbColor(colors.fgMuted)}v\x1B[0m\x1B[${rgbColor(colors.fgDim)}${numPart}\x1B[0m`
+    : `\x1B[${rgbColor(colors.fgDim)}${currentVersion}\x1B[0m`;
 
   for (let i = 0; i < BANNER_LINES.length; i++) {
     const raw = BANNER_LINES[i];
     const coloredLogo = `\x1B[${whiteCode}m${raw}\x1B[0m`;
 
     if (i === 0) {
-      // Position version badge directly adjacent to top-right of logo
-      lines.push(padEndVisual(`${coloredLogo} ${vBadge}`, safeWidth));
+      // Position version badge directly adjacent to top-right of logo (pulled 1 char closer)
+      lines.push(padEndVisual(`${coloredLogo}${vBadge}`, safeWidth));
     } else {
       lines.push(padEndVisual(coloredLogo, safeWidth));
     }

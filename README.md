@@ -11,7 +11,8 @@
 ## ✨ Features
 
 - **🌐 Zero-Config Architecture**: Works out of the box with pure code-based defaults. No mandatory configuration files or complex setups required.
-- **⚡ Real-Time Multi-Repo Polling**: High-performance GraphQL polling (`gh api graphql`) with automated resilience and fallback across all repositories involving you.
+- **⚡ Real-Time Multi-Repo Polling**: High-performance GraphQL polling (`gh api graphql`) with automated resilience, parallel batched team queries, and automatic fallback across all repositories involving you.
+- **📊 90-Day Velocity & Team Leaderboard (<kbd>p</kbd>)**: Trailing 30-day velocity metrics with embedded 60d/90d baseline trend indicators, stack-ranked team leaderboard with dynamic sorting (<kbd>s</kbd>), and high-throughput concurrent 90d backfill (<kbd>b</kbd>).
 - **🔍 Comprehensive Status Triage**: Combines code review verdicts (*Approved, Changes Requested, In Review, No Review*) and CI check runs (*Passing, Failing, Pending*) into unified health indicators.
 - **⚙️ Live Settings & Extensions Modal (<kbd>s</kbd>)**: Interactively adjust default agents, polling intervals, search queries, dry-run mode, and toggle the Local API server on the fly with live state persistence.
 - **📄 Interactive Diff Pop-Up Modal (<kbd>d</kbd>)**: View syntax-colorized git diffs directly inside a modal window without leaving the dashboard, with fast file jumping (<kbd>n</kbd>/<kbd>p</kbd>) and in-memory caching.
@@ -46,26 +47,27 @@
 │ ██╔═══██╗ ██║   ██║ ██╔════╝ ██╔══██╗ ██╔════╝ ██╔════╝ ██╔════╝ ██╔══██╗                             │
 │ ██║   ██║ ╚██╗ ██╔╝ █████╗   ██████╔╝ ███████╗ █████╗   █████╗   ██████╔╝                             │
 │ ╚██████╔╝  ╚████╔╝  ███████╗ ██║  ██╗ ╚════██║ ███████╗ ███████╗ ██║  ██╗                             │
-│  User: @josesilva  Repos: 32  Open PRs: 18  ● 4 Needs Attention  Last Poll: 16:42:15                   │
+│  User: @alice  Repos: 32  Open PRs: 18  ● 4 Needs Attention  Last Poll: 16:42:15                   │
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  [Tab / t]  [1] ● Mine (3)    [2] ○ Team: core-platform (8)                                            │
 │  › Filter PRs (press / to search)                                                                      │
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  REPO           #     BRANCH             TITLE                               STATUS    CI   REV      AGE   │
-│── 🏢 acme-corp (3) ──────────────────────────────────────────────────────────────────────────────────│
-│▎ billing       #142  fix/inv-rounding   fix: resolve invoice balance round… 🟢 Ready   ✔   ✔ 2/2    1h    │
-│  meridian      #88   feat/stripe-v3     feat: upgrade stripe payment flow   🔴 Needs   ✖   ✖ 0/1    3h    │
-│  knowledge     #12   docs/api-guide     docs: update webhook architecture   🟡 Revw    ⏳   ⏳1/2    1d    │
-│── 👤 zepedrosilva (1) ─────────────────────────────────────────────────────────────────────────────────│
-│  overseer      #1    feat/initial-code… feat: Overseer v0.1.0 initial rele… 🟢 Ready   ✔   ✔ 1      10m   │
+│── 🏢 acme-corp (3) ────────────────────────────────────────────────────────────────────────────────────│
+│▎ web-frontend  #142  fix/inv-rounding   fix: resolve invoice balance round… 🟢 Ready   ✔   ✔ 2/2    1h    │
+│  api-gateway   #88   feat/auth-v3       feat: upgrade authentication flow   🔴 Needs   ✖   ✖ 0/1    3h    │
+│  docs-site     #12   docs/api-guide     docs: update webhook architecture   🟡 Revw    ⏳   ⏳1/2    1d    │
+│── 👤 octocat (1) ──────────────────────────────────────────────────────────────────────────────────────│
+│  overseer      #1    feat/initial-code… feat: Overseer initial release      🟢 Ready   ✔   ✔ 1      10m   │
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  [Enter]details  [s]settings  [o]open  [m]merge  [a]agent  [c]comment  [d]diff  [x]close  [R]recheck  [q]  │
+│  [Enter]details  [Tab]scope  [p]stats  [s]settings  [o]open  [m]merge  [a]agent  [d]diff  [q]quit          │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Interactive Diff Pop-up Modal (Press <kbd>d</kbd>)
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ┌─ Diff: acme-corp/billing#142 (fix/inv-rounding) ─────────────── [Esc to close] ─┐                 │
+│  ┌─ Diff: acme-corp/web-frontend#142 (fix/inv-rounding) ──────────── [Esc to close] ─┐                 │
 │  │ ───  [File 1/2]  src/billing/rounding.ts ──────────────────────────────────────── │                 │
 │  │ index 1234567..89abcdef 100644                                                    │                 │
 │  │ --- a/src/billing/rounding.ts                                                     │                 │
@@ -83,6 +85,33 @@
 │  └─ [n/p] file  [j/k] scroll  [o] open  [m] merge  [a] agent  [c] comment ── [1/42 L] ─┘                 │
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  [Enter]details  [s]settings  [o]open  [m]merge  [a]agent  [c]comment  [d]diff  [x]close  [R]recheck  [q]  │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+### Interactive Stats & Velocity Modal (Press <kbd>p</kbd>)
+```text
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ┌─ PR Stats & Leaderboard: Team: core-platform (30d trailing) ─────── [Esc to close] ─┐                 │
+│  │ Scope: [Tab/t] ○ Mine  ● Team: core-platform    Leaderboard Sort: [s] ● 30d Merged PRs             │ │
+│  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │ 📦 Code Volume & Merged PR History (90d baseline)                                                 │ │
+│  │   • Merged PRs:  48 (30d)  ▲ +12 vs 60d baseline  │  Avg Size: 240 lines                          │ │
+│  │   • Total Volume: 30d: 48 merged  •  60d: 84 merged  •  90d: 120 merged                           │ │
+│  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │ ⏱️ Velocity & Review Turnaround                                                                    │ │
+│  │   • Median Time to First Review: 4.2h      • Median Time to Merge: 1.5d                           │ │
+│  │   • CI Pass Rate:                98% (120/122 runs)   • Discussion Density:   2.4 cmts/PR         │ │
+│  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │ 👥 Team Member Leaderboard (Ranked by 30d Merged PRs)                                             │ │
+│  │   RANK  MEMBER                    30d   60d   90d  OPEN CLOSED  TOTAL  CMTS/PR  STALE             │ │
+│  │   #1    Alice Walker (@alice)      18    32    45     2      1     21      2.1      0             │ │
+│  │   #2    Bob Dylan (@bob)           15    28    40     1      0     16      1.8      0             │ │
+│  │   #3    Charlie Day (@charlie)     10    16    24     3      2     15      3.4      1             │ │
+│  │   #4    Diana Prince (@diana)       5     8    11     0      1      6      1.2      0             │ │
+│  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │ ⚠️ Bottlenecks Requiring Attention (>3d pending)                                                  │ │
+│  │   • acme-corp/web-frontend#142 (5d pending — CI failing)                                          │ │
+│  └─ [Tab] scope  [s] sort  [b] backfill  [Esc/p] close ────────────────────────────────────────────────┘ │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  [Enter]details  [Tab]scope  [p]stats  [s]settings  [o]open  [m]merge  [a]agent  [d]diff  [q]quit          │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -140,10 +169,15 @@ overseer --reset-state
 
 | Key | Action | Description |
 |---|---|---|
+| `Tab` / `t` | **Toggle Scope** | Switch instantly between **Mine** and **Team** monitoring scopes |
+| `1` / `2` | **Switch Scope** | Select **[1] Mine** or **[2] Team** directly |
+| `p` | **PR Stats & Leaderboard** | Open performance dashboard (trailing 30d/60d/90d historical metrics, stack-ranked team leaderboard with direct right-aligned numbers and [s] sorting) |
+| `b` / `B` | **Backfill PR Stats** | Trigger on-demand historical stats backfill (defaults to 90d, with [1/2/3] timeframe keys) |
+| `?` / `h` | **All Actions & Help** | Open comprehensive categorized actions modal |
 | `↑` / `k` | **Navigate Up** | Move selection up in PR list |
 | `↓` / `j` | **Navigate Down** | Move selection down in PR list |
 | `Enter` / `v` | **View Details Modal** | Open centered pop-up window with CI checks, threads, agent status, and scrollable logs |
-| `s` | **Settings & Extensions** | Open interactive settings modal to adjust defaults and toggle extensions |
+| `s` | **Settings & Extensions** | Open interactive settings modal to configure team slug, defaults, and extensions |
 | `d` | **View Diff Modal** | Open syntax-colorized git diff in a pop-up window (with file jumping <kbd>n</kbd>/<kbd>p</kbd> and triage shortcuts) |
 | `L` / `l` | **View Agent Logs** | Open real-time streaming or historical agent execution logs for the selected PR |
 | `a` | **Trigger Agent (2-Step)** | Select/change repo agent with <kbd>1-N</kbd> or <kbd>←/→</kbd>, confirm with <kbd>Enter</kbd> (persists preference), then input prompt |

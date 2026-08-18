@@ -35,12 +35,12 @@ describe('AI Agent Dispatcher & Worktrees', () => {
 
   function createMockPR(): PrState {
     return {
-      key: { owner: 'acme-corp', repo: 'billing', number: 142 },
+      key: { owner: 'acme-corp', repo: 'web-frontend', number: 142 },
       title: 'Fix invoice calculation',
       branch: 'fix/invoice-rounding',
       baseBranch: 'main',
-      author: 'josesilva',
-      url: 'https://github.com/acme-corp/billing/pull/142',
+      author: 'alice',
+      url: 'https://github.com/acme-corp/web-frontend/pull/142',
       isDraft: false,
       state: 'OPEN',
       reviewVerdict: 'CHANGES_REQUESTED',
@@ -62,14 +62,14 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         pr: 142,
         branch: 'fix/rounding',
         owner: 'acme-corp',
-        repo: 'billing',
-        url: 'https://github.com/acme-corp/billing/pull/142',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
         worktree: '/tmp/wt',
         prompt: 'Fix the bug',
       });
 
       expect(result).toBe(
-        'my-agent --pr 142 --branch fix/rounding --repo acme-corp/billing --dir /tmp/wt -p "Fix the bug"'
+        'my-agent --pr 142 --branch fix/rounding --repo acme-corp/web-frontend --dir /tmp/wt -p "Fix the bug"'
       );
     });
 
@@ -79,8 +79,8 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         pr: 142,
         branch: 'fix/rounding',
         owner: 'acme-corp',
-        repo: 'billing',
-        url: 'https://github.com/acme-corp/billing/pull/142',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
       });
 
       expect(result).toContain('claude -p "Review this Pull Request');
@@ -124,7 +124,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       };
 
       const wtPath = resolveWorktreeDir(config, pr, tmpDir);
-      expect(wtPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-billing-142'));
+      expect(wtPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142'));
     });
 
     it('cleans up worktree directory without throwing', () => {

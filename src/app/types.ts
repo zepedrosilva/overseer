@@ -103,6 +103,14 @@ export interface PrState {
   agent?: string;                // per-repo or per-PR agent override
   commentsCount: number;
   unresolvedThreadsCount: number;
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+  commitsCount?: number;
+  firstReviewAt?: string;
+  mergedAt?: string;
+  closedAt?: string;
+  scope?: 'mine' | 'team' | 'both';
   approvedCount?: number;
   requiredApprovalsCount?: number;
   pendingReviewersCount?: number;
@@ -164,6 +172,7 @@ export interface AppSettings {
   pollIntervalSecs: number;
   worktreesDir: string;
   user?: string;
+  team?: string;
   filterUserOnly: boolean;
   searchQuery: string;
   dryRun: boolean;
@@ -178,16 +187,127 @@ export interface AppExtensions {
   api: ApiServerConfig;
 }
 
+// ── Historical PR & Stats Records ──────────────────────────────────────────
+
+export interface HistoricalPrRecord {
+  key: PrKey;
+  author: string;
+  title: string;
+  createdAt: string;
+  firstReviewAt?: string;
+  mergedAt?: string;
+  closedAt?: string;
+  state: 'OPEN' | 'MERGED' | 'CLOSED';
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commitsCount: number;
+  commentsCount: number;
+  unresolvedThreadsCount: number;
+  ciStatus: CiStatus;
+  scope: 'mine' | 'team' | 'both';
+}
+
+export interface HistoricalStatsStore {
+  records: HistoricalPrRecord[];
+}
+
+export type StatsTimeframe = '30d' | '60d' | '90d';
+
+export interface TrendDelta {
+  delta60: number;
+  delta90: number;
+  direction60: 'up' | 'down' | 'flat';
+  direction90: 'up' | 'down' | 'flat';
+}
+
+export interface MetricTrends {
+  mergedPRs?: TrendDelta;
+  avgPRSize?: TrendDelta;
+  commitsPerPR?: TrendDelta;
+  reviewTurnaround?: TrendDelta;
+  ciPassRate?: TrendDelta;
+  discussionDensity?: TrendDelta;
+}
+
+export type LeaderboardSort = 'merged30' | 'merged60' | 'merged90' | 'total' | 'comments' | 'stale';
+
+export interface MemberLeaderboardEntry {
+  rank: number;
+  author: string;
+  name?: string;
+  merged30: number;
+  merged60: number;
+  merged90: number;
+  open: number;
+  closed: number;
+  total: number;
+  discussionDensity: number;
+  bottlenecksCount: number;
+}
+
+export interface AggregatedStats {
+  timeframe: StatsTimeframe;
+  scope: 'mine' | 'team';
+  totalPRs: number;
+  mergedPRs: number;
+  mergedPRs30: number;
+  mergedPRs60: number;
+  mergedPRs90: number;
+  openPRs: number;
+  closedPRs: number;
+  totalAdditions: number;
+  totalDeletions: number;
+  totalChangedFiles: number;
+  avgPRSize: number;
+  sizeDistribution: {
+    smallPercent: number; // < 100 lines
+    mediumPercent: number; // 100 - 500 lines
+    largePercent: number; // > 500 lines
+  };
+  totalCommits: number;
+  avgCommitsPerPR: number;
+  medianTimeToFirstReviewHours: number | null;
+  medianTimeToMergeDays: number | null;
+  ciPassRatePercent: number;
+  totalCiRuns: number;
+  passedCiRuns: number;
+  reviewDensityCommentsPerPR: number;
+  staleBottlenecks: Array<{
+    key: PrKey;
+    title: string;
+    daysPending: number;
+    reason: string;
+  }>;
+  memberBreakdown?: MemberLeaderboardEntry[];
+  trends?: MetricTrends;
+}
+
+export interface BackfillProgress {
+  currentMember: string;
+  memberIndex: number;
+  totalMembers: number;
+  prsFound: number;
+  totalPRs: number;
+  timeframeDays?: number;
+  status: 'starting' | 'in_progress' | 'done' | 'error';
+  log: string[];
+}
+
 // ── App State ───────────────────────────────────────────────────────────────
 
 export interface AppState {
   settings: AppSettings;
   extensions: AppExtensions;
-  repoAgents: Record<string, string>;               // key: "owner/repo" in lowercase -> agentName
-  customAgents: Record<string, AgentDefinition>;    // custom agent templates
+  repoAgents: Record<string, string>; // key: "owner/repo" in lowercase -> agentName
+  customAgents: Record<string, AgentDefinition>; // custom agent templates
   repos: RepoHandle[];
-  prs: Map<string, PrState>;                        // key: prKeyToString(key)
-  workers: Map<string, WorkerHandle>;               // key: prKeyToString(prKey)
+  prs: Map<string, PrState>; // key: prKeyToString(key)
+  workers: Map<string, WorkerHandle>; // key: prKeyToString(prKey)
+  viewScope?: 'mine' | 'team';
+  teamMembers?: string[];
+  teamProfiles?: Record<string, { login: string; name?: string }>;
+  historicalStats?: HistoricalStatsStore;
   dryRun: boolean;
   lastPolled?: number;
   isPolling?: boolean;
@@ -203,6 +323,7 @@ export interface AppConfig {
     worktrees_dir: string;
     batch_size: number;
     user?: string;
+    team?: string;
     filter_user_only?: boolean;
     search_query?: string;
   };

@@ -244,3 +244,76 @@ export async function viewPRDiffInteractive(
     });
   });
 }
+
+export async function fetchTeamMembers(teamSlug: string): Promise<string[]> {
+  try {
+    const cleanSlug = teamSlug.trim();
+    if (!cleanSlug) return [];
+
+    // If comma-separated usernames or space-separated
+    if (cleanSlug.includes(',') || (!cleanSlug.includes('/') && cleanSlug.includes(' '))) {
+      return cleanSlug
+        .split(/[, ]+/)
+        .map((s) => s.trim().replace(/^@/, ''))
+        .filter(Boolean);
+    }
+
+    // If GitHub org/team slug (e.g. "acme-corp/core-team")
+    if (cleanSlug.includes('/')) {
+      const [org, team] = cleanSlug.split('/');
+      const { stdout } = await execFileAsync('gh', [
+        'api',
+        `orgs/${org}/teams/${team}/members`,
+        '--paginate',
+        '--jq',
+        '.[].login',
+      ]);
+      return stdout
+        .split('\n')
+        .map((s) => s.trim().replace(/^@/, ''))
+        .filter(Boolean);
+    }
+
+    return [cleanSlug.replace(/^@/, '')];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchTeamMemberProfiles(
+  logins: string[]
+): Promise<Record<string, { login: string; name?: string }>> {
+  if (!logins || logins.length === 0) return {};
+
+  const profiles: Record<string, { login: string; name?: string }> = {};
+  const uniqueLogins = Array.from(new Set(logins.map((l) => l.trim().replace(/^@/, '')))).filter(Boolean);
+
+  if (uniqueLogins.length === 0) return {};
+
+  // Build a single batched GraphQL query
+  const queryFields = uniqueLogins
+    .map((login, idx) => `u${idx}: user(login: ${JSON.stringify(login)}) { login name }`)
+    .join('\n');
+  const query = `query {\n${queryFields}\n}`;
+
+  try {
+    const res = await runGraphQL<{ data?: Record<string, { login: string; name?: string | null }> }>(query);
+    if (res?.data) {
+      for (const userObj of Object.values(res.data)) {
+        if (userObj && userObj.login) {
+          profiles[userObj.login.toLowerCase()] = {
+            login: userObj.login,
+            name: userObj.name || undefined,
+          };
+        }
+      }
+    }
+  } catch {
+    // Fallback: map with login
+    for (const login of uniqueLogins) {
+      profiles[login.toLowerCase()] = { login };
+    }
+  }
+
+  return profiles;
+}

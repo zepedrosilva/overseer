@@ -53,7 +53,7 @@ describe('GitHub CLI Wrapper Actions', () => {
       expect(file).toBe('gh');
       expect(args).toEqual([
         'pr', 'merge', '142',
-        '--repo', 'acme-corp/billing',
+        '--repo', 'acme-corp/web-frontend',
         '--squash',
         '--delete-branch',
       ]);
@@ -61,7 +61,7 @@ describe('GitHub CLI Wrapper Actions', () => {
       return {} as any;
     });
 
-    const res = await mergePR('acme-corp', 'billing', 142, true);
+    const res = await mergePR('acme-corp', 'web-frontend', 142, true);
     expect(res).toBe('Merged');
   });
 
@@ -70,14 +70,14 @@ describe('GitHub CLI Wrapper Actions', () => {
       expect(file).toBe('gh');
       expect(args).toEqual([
         'pr', 'comment', '142',
-        '--repo', 'acme-corp/billing',
+        '--repo', 'acme-corp/web-frontend',
         '--body', 'LGTM! Great job.',
       ]);
       callback(null, { stdout: 'https://github.com/comment/1\n', stderr: '' });
       return {} as any;
     });
 
-    const res = await addComment('acme-corp', 'billing', 142, 'LGTM! Great job.');
+    const res = await addComment('acme-corp', 'web-frontend', 142, 'LGTM! Great job.');
     expect(res).toBe('https://github.com/comment/1');
   });
 
@@ -86,13 +86,13 @@ describe('GitHub CLI Wrapper Actions', () => {
       expect(file).toBe('gh');
       expect(args).toEqual([
         'pr', 'close', '142',
-        '--repo', 'acme-corp/billing',
+        '--repo', 'acme-corp/web-frontend',
       ]);
       callback(null, { stdout: 'Closed\n', stderr: '' });
       return {} as any;
     });
 
-    const res = await closePR('acme-corp', 'billing', 142);
+    const res = await closePR('acme-corp', 'web-frontend', 142);
     expect(res).toBe('Closed');
   });
 
@@ -101,14 +101,14 @@ describe('GitHub CLI Wrapper Actions', () => {
       expect(file).toBe('gh');
       expect(args).toEqual([
         'pr', 'view', '142',
-        '--repo', 'acme-corp/billing',
+        '--repo', 'acme-corp/web-frontend',
         '--web',
       ]);
       callback(null, { stdout: '', stderr: '' });
       return {} as any;
     });
 
-    await openInBrowser('acme-corp', 'billing', 142);
+    await openInBrowser('acme-corp', 'web-frontend', 142);
   });
 
   it('executes getPRDiff', async () => {
@@ -116,13 +116,40 @@ describe('GitHub CLI Wrapper Actions', () => {
       expect(file).toBe('gh');
       expect(args).toEqual([
         'pr', 'diff', '142',
-        '--repo', 'acme-corp/billing',
+        '--repo', 'acme-corp/web-frontend',
       ]);
       callback(null, { stdout: 'diff --git a/file b/file\n', stderr: '' });
       return {} as any;
     });
 
-    const diff = await getPRDiff('acme-corp', 'billing', 142);
+    const diff = await getPRDiff('acme-corp', 'web-frontend', 142);
     expect(diff).toContain('diff --git');
+  });
+
+  it('resolves team member profiles with full names', async () => {
+    const { fetchTeamMemberProfiles } = await import('../src/watcher/gh.js');
+    const { EventEmitter } = await import('node:events');
+
+    vi.mocked(childProcess.spawn).mockImplementation(() => {
+      const child: any = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { write: vi.fn(), end: vi.fn() };
+
+      process.nextTick(() => {
+        child.stdout.emit('data', JSON.stringify({
+          data: {
+            u0: { login: 'alice', name: 'Alice Walker' },
+            u1: { login: 'bob', name: 'Bob Dylan' },
+          },
+        }));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const profiles = await fetchTeamMemberProfiles(['alice', 'bob']);
+    expect(profiles.alice?.name).toBe('Alice Walker');
+    expect(profiles.bob?.name).toBe('Bob Dylan');
   });
 });

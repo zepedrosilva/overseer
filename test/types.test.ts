@@ -9,16 +9,16 @@ import {
 describe('Domain Types Helpers', () => {
   describe('prKeyToString', () => {
     it('formats PrKey as owner/repo#number', () => {
-      const key: PrKey = { owner: 'acme-corp', repo: 'billing', number: 142 };
-      expect(prKeyToString(key)).toBe('acme-corp/billing#142');
+      const key: PrKey = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      expect(prKeyToString(key)).toBe('acme-corp/web-frontend#142');
     });
   });
 
   describe('parsePrKey', () => {
     it('parses owner/repo#number', () => {
-      expect(parsePrKey('acme-corp/billing#142')).toEqual({
+      expect(parsePrKey('acme-corp/web-frontend#142')).toEqual({
         owner: 'acme-corp',
-        repo: 'billing',
+        repo: 'web-frontend',
         number: 142,
       });
     });
@@ -40,9 +40,9 @@ describe('Domain Types Helpers', () => {
 
   describe('parseRepoUrl', () => {
     it('parses SSH git URLs', () => {
-      expect(parseRepoUrl('git@github.com:acme-corp/billing.git')).toEqual({
+      expect(parseRepoUrl('git@github.com:acme-corp/web-frontend.git')).toEqual({
         owner: 'acme-corp',
-        repo: 'billing',
+        repo: 'web-frontend',
       });
       expect(parseRepoUrl('git@github.com:zepedrosilva/overseer.git')).toEqual({
         owner: 'zepedrosilva',
@@ -51,9 +51,9 @@ describe('Domain Types Helpers', () => {
     });
 
     it('parses HTTPS git URLs', () => {
-      expect(parseRepoUrl('https://github.com/acme-corp/billing.git')).toEqual({
+      expect(parseRepoUrl('https://github.com/acme-corp/web-frontend.git')).toEqual({
         owner: 'acme-corp',
-        repo: 'billing',
+        repo: 'web-frontend',
       });
       expect(parseRepoUrl('https://github.com/owner/repo')).toEqual({
         owner: 'owner',
@@ -66,9 +66,9 @@ describe('Domain Types Helpers', () => {
     });
 
     it('parses shorthand owner/repo notation', () => {
-      expect(parseRepoUrl('acme-corp/billing')).toEqual({
+      expect(parseRepoUrl('acme-corp/web-frontend')).toEqual({
         owner: 'acme-corp',
-        repo: 'billing',
+        repo: 'web-frontend',
       });
     });
 

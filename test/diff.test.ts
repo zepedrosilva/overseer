@@ -6,12 +6,12 @@ import type { PrState } from '../src/app/types.js';
 describe('Diff Engine & Pop-up Modal', () => {
   function createMockPR(): PrState {
     return {
-      key: { owner: 'acme-corp', repo: 'billing', number: 142 },
+      key: { owner: 'acme-corp', repo: 'web-frontend', number: 142 },
       title: 'Fix invoice rounding calculations',
       branch: 'fix/rounding',
       baseBranch: 'main',
-      author: 'josesilva',
-      url: 'https://github.com/acme-corp/billing/pull/142',
+      author: 'alice',
+      url: 'https://github.com/acme-corp/web-frontend/pull/142',
       isDraft: false,
       state: 'OPEN',
       reviewVerdict: 'APPROVED',
@@ -99,7 +99,7 @@ index abcdef1..2345678 100644
 
       expect(lines).toHaveLength(14);
       const fullText = lines.map(stripAnsi).join('\n');
-      expect(fullText).toContain('Diff: acme-corp/billing#142 (fix/rounding)');
+      expect(fullText).toContain('Diff: acme-corp/web-frontend#142 (fix/rounding)');
       expect(fullText).toContain('Fetching diff from GitHub');
       expect(fullText).toContain('[Esc to close]');
     });
@@ -121,7 +121,7 @@ index abcdef1..2345678 100644
       }
 
       const fullText = lines.map(stripAnsi).join('\n');
-      expect(fullText).toContain('Diff: acme-corp/billing#142');
+      expect(fullText).toContain('Diff: acme-corp/web-frontend#142');
       expect(fullText).toContain('[File 1]');
       expect(fullText).toContain('[n/p] file');
       expect(fullText).toContain('[j/k] scroll');
