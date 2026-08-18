@@ -46,3 +46,32 @@ export function renderSearchBar(query: string, isSearching: boolean, width: numb
   const text = `  \x1B[${rgbColor(colors.fgDim)}› Filter PRs (press / to search)\x1B[0m`;
   return padEndVisual(text, width);
 }
+
+export interface RenderScopeTabBarOptions {
+  scope: 'mine' | 'team';
+  mineCount: number;
+  teamCount: number;
+  teamMembersCount?: number;
+  teamName?: string;
+  width: number;
+}
+
+export function renderScopeTabBar(options: RenderScopeTabBarOptions): string {
+  const { scope, mineCount, teamCount, teamMembersCount, teamName, width } = options;
+
+  const isMine = scope === 'mine';
+  const mineDot = isMine ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
+  const mineColor = isMine ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
+  const mineBadge = `${mineDot} \x1B[${rgbColor(colors.cyan)}[1]\x1B[0m ${mineColor}Mine (${mineCount})\x1B[0m`;
+
+  const isTeam = scope === 'team';
+  const teamDot = isTeam ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
+  const teamColor = isTeam ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
+  const displayTeam = teamName ? teamName.replace(/^[^/]+\//, '') : undefined;
+  const teamLabel = displayTeam ? `Team: ${displayTeam}` : 'Team';
+  const membersPart = teamMembersCount !== undefined ? `${teamMembersCount} members · ` : '';
+  const teamBadge = `${teamDot} \x1B[${rgbColor(colors.cyan)}[2]\x1B[0m ${teamColor}${teamLabel} (${membersPart}${teamCount} PRs)\x1B[0m`;
+
+  const leftText = `  \x1B[${rgbColor(colors.fgDim)}[Tab / t]\x1B[0m  ${mineBadge}    ${teamBadge}`;
+  return padEndVisual(leftText, width);
+}

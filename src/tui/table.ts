@@ -20,8 +20,10 @@ export interface RenderTableOptions {
   selectedIndex: number;
   width: number;
   height: number;
+  scope?: 'mine' | 'team';
   currentUser?: string;
   workers?: Map<string, WorkerHandle>;
+  teamProfiles?: Record<string, { login: string; name?: string }>;
   spinnerTick?: number;
 }
 
@@ -30,32 +32,38 @@ type TableItem =
   | { type: 'pr'; pr: PrState; originalIndex: number };
 
 export function renderTable(options: RenderTableOptions): string[] {
-  const { prs, selectedIndex, width, height, currentUser } = options;
+  const { prs, selectedIndex, width, height, scope, currentUser } = options;
   const lines: string[] = [];
 
   const safeWidth = Math.max(10, width - 2);
+  const isTeam = scope === 'team';
 
   // Responsive column width allocation
   let revColWidth = 12;
   let repoColWidth = 14;
   let branchColWidth = 15;
+  let authorColWidth = isTeam ? 12 : 0;
 
   if (safeWidth < 60) {
     revColWidth = 5;
     repoColWidth = 6;
     branchColWidth = 6;
+    authorColWidth = isTeam ? 6 : 0;
   } else if (safeWidth < 75) {
     revColWidth = 6;
     repoColWidth = 8;
     branchColWidth = 8;
+    authorColWidth = isTeam ? 8 : 0;
   } else if (safeWidth < 95) {
     revColWidth = 8;
     repoColWidth = 10;
     branchColWidth = 10;
+    authorColWidth = isTeam ? 10 : 0;
   } else if (safeWidth < 115) {
     revColWidth = 10;
     repoColWidth = 12;
     branchColWidth = 12;
+    authorColWidth = isTeam ? 11 : 0;
   }
 
   // Exact column breakdown:
@@ -65,16 +73,19 @@ export function renderTable(options: RenderTableOptions): string[] {
   // 4. rev: revColWidth + 1 space
   // 5. repo: repoColWidth + 1 space
   // 6. prNum: 6 ("#142  ") + 1 space
-  // 7. branch: branchColWidth + 1 space
-  // 8. title: titleWidth + 1 space
-  // 9. age: 5 ("  40d")
+  // 7. author: (authorColWidth ? authorColWidth + 1 space : 0)
+  // 8. branch: branchColWidth + 1 space
+  // 9. title: titleWidth + 1 space
+  // 10. age: 5 ("  40d")
+  const authorSpacing = isTeam ? authorColWidth + 1 : 0;
   const fixedWidthWithoutTitle =
-    2 + 8 + 1 + 2 + 1 + revColWidth + 1 + repoColWidth + 1 + 6 + 1 + branchColWidth + 1 + 1 + 5;
+    2 + 8 + 1 + 2 + 1 + revColWidth + 1 + repoColWidth + 1 + 6 + 1 + authorSpacing + branchColWidth + 1 + 1 + 5;
   const titleWidth = Math.max(4, safeWidth - fixedWidthWithoutTitle);
 
   // Table header in cool slate
   const repoHeader = 'REPO'.padEnd(repoColWidth);
   const numHeader = '#'.padEnd(6);
+  const authorHeader = isTeam ? 'AUTHOR'.padEnd(authorColWidth) + ' ' : '';
   const branchHeader = 'BRANCH'.padEnd(branchColWidth);
   const titleHeader = 'TITLE'.padEnd(titleWidth);
   const statusHeader = 'STATUS'.padEnd(8);
@@ -82,7 +93,7 @@ export function renderTable(options: RenderTableOptions): string[] {
   const revHeader = 'REV'.padEnd(revColWidth);
   const ageHeader = 'AGE'.padStart(5);
 
-  const header = `  ${repoHeader} ${numHeader} ${branchHeader} ${titleHeader} ${statusHeader} ${ciHeader} ${revHeader} ${ageHeader}`;
+  const header = `  ${repoHeader} ${numHeader} ${authorHeader}${branchHeader} ${titleHeader} ${statusHeader} ${ciHeader} ${revHeader} ${ageHeader}`;
   lines.push(`\x1B[${rgbColor(colors.fgDim)}${padEndVisual(header, safeWidth)}\x1B[0m`);
 
   if (prs.length === 0) {
@@ -183,6 +194,9 @@ export function renderTable(options: RenderTableOptions): string[] {
     const revText = padEndVisual(truncateVisual(revBadge.text, revColWidth), revColWidth);
     const repoName = truncateVisual(pr.key.repo, repoColWidth).padEnd(repoColWidth);
     const prNum = `#${pr.key.number}`.padEnd(6);
+    const profile = options.teamProfiles?.[pr.author.toLowerCase()];
+    const rawAuthor = profile?.name || pr.author;
+    const authorName = isTeam ? truncateVisual(rawAuthor, authorColWidth).padEnd(authorColWidth) : '';
     const branch = truncateVisual(pr.branch, branchColWidth).padEnd(branchColWidth);
     const title = truncateVisual(pr.title, titleWidth).padEnd(titleWidth);
     const age = formatTimeAgo(pr.updatedAt).padStart(5);
@@ -192,6 +206,7 @@ export function renderTable(options: RenderTableOptions): string[] {
 
     const repoPart = `\x1B[${rgbColor(colors.fg)}${repoName}\x1B[0m`;
     const numPart = `\x1B[${rgbColor(colors.fg)}${prNum}\x1B[0m`;
+    const authorPart = isTeam ? `\x1B[${rgbColor(colors.cyan)}${authorName}\x1B[0m ` : '';
     const branchPart = `\x1B[${rgbColor(colors.fgDim)}${branch}\x1B[0m`;
     const titlePart = `\x1B[${rgbColor(colors.fg)}${title}\x1B[0m`;
     const statusPart = `\x1B[${sc}${sIcon} ${sName}\x1B[0m`;
@@ -199,7 +214,7 @@ export function renderTable(options: RenderTableOptions): string[] {
     const revPart = `\x1B[${rgbColor(revColorHex)}${revText}\x1B[0m`;
     const agePart = `\x1B[${rgbColor(colors.fgMuted)}${age}\x1B[0m`;
 
-    const rowContent = `${bgPrefix}${marker}${repoPart} ${numPart} ${branchPart} ${titlePart} ${statusPart} ${ciPart} ${revPart} ${agePart}${bgReset}`;
+    const rowContent = `${bgPrefix}${marker}${repoPart} ${numPart} ${authorPart}${branchPart} ${titlePart} ${statusPart} ${ciPart} ${revPart} ${agePart}${bgReset}`;
 
     lines.push(padEndVisual(rowContent, safeWidth));
   }

@@ -111,7 +111,7 @@ export function renderDetailsModal(options: RenderDetailsModalOptions): string[]
   }
   if (pr.requestedReviewers && pr.requestedReviewers.length > 0) {
     hasReviewers = true;
-    contentLines.push(`  \x1B[${rgbColor(colors.yellow)}⏳ Pending:\x1B[0m ${pr.requestedReviewers.map(u => `@${u}`).join(', ')}`);
+    contentLines.push(`  \x1B[${rgbColor(colors.yellow)}○ Pending:\x1B[0m ${pr.requestedReviewers.map(u => `@${u}`).join(', ')}`);
   }
   if (!hasReviewers) {
     contentLines.push(`  \x1B[${rgbColor(colors.fgMuted)}(No reviewers assigned or requested)\x1B[0m`);

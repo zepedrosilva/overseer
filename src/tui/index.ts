@@ -2,20 +2,25 @@
 // Manages alternate screen buffer, Warp/iTerm scroll compatibility,
 // split-view rendering, and keyboard/mouse events.
 
-import type { AppState, PrState } from '../app/types.js';
+import type { AppState, PrState, StatsTimeframe } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { calculateLayout, padEndVisual } from './layout.js';
 import { renderBanner, renderStatsBar, renderDivider } from './banner.js';
-import { renderSearchBar, filterPRs } from './search.js';
+import { renderSearchBar, renderScopeTabBar, filterPRs } from './search.js';
 import { renderTable } from './table.js';
 import { renderDetails, renderDetailsModal } from './details.js';
 import { renderSettingsModal, SETTINGS_ITEMS, POLL_INTERVALS } from './settings.js';
 import { renderDiffModal, parseAndColorizeDiff } from './diff.js';
 import { renderLogsModal, loadPRLogFile } from './logs.js';
+import { renderStatsModal } from './stats.js';
+import { renderBackfillModal } from './backfill.js';
+import { renderHelpModal } from './help.js';
+import { calculateStats, backfillHistoricalStats, backfill30DayStats } from '../stats/index.js';
 import { renderFooter, type FooterMode, type FooterContext } from './footer.js';
 import { getRepoAgent, setRepoAgent, getAvailableAgents, saveState } from '../app/state.js';
 import { getPRDiff } from '../watcher/gh.js';
 import { colors, rgbColor } from './colors.js';
+import type { BackfillProgress, LeaderboardSort } from '../app/types.js';
 
 export type TUIActionCallback = (action: string, payload?: Record<string, unknown>) => void | Promise<void>;
 
@@ -56,6 +61,11 @@ export function createTUI(
   const diffCache = new Map<string, { diff: string; fetchedAt: string }>();
   let isLogsModalOpen = false;
   let logsScrollOffset = 0;
+  let isStatsModalOpen = false;
+  let statsSortBy: LeaderboardSort = 'merged30';
+  let isHelpModalOpen = false;
+  let isBackfillModalOpen = false;
+  let backfillProgress: BackfillProgress | null = null;
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
 
@@ -87,7 +97,29 @@ export function createTUI(
 
   function getFilteredPRs(): PrState[] {
     const list = Array.from(data.prs.values());
-    const filtered = filterPRs(list, searchQuery);
+    const currentScope = data.viewScope || 'mine';
+    const user = data.currentUser?.toLowerCase();
+
+    // 1. Filter by active Scope and strictly active (open) PRs
+    const scopedList = list.filter((pr) => {
+      if (
+        pr.state === 'CLOSED' ||
+        pr.state === 'MERGED' ||
+        pr.overallStatus === 'Closed' ||
+        pr.overallStatus === 'Merged'
+      ) {
+        return false;
+      }
+      if (currentScope === 'mine') {
+        if (user && pr.author.toLowerCase() === user) return true;
+        return pr.scope === 'mine' || pr.scope === 'both' || !pr.scope;
+      } else {
+        // team scope
+        return pr.scope === 'team' || pr.scope === 'both';
+      }
+    });
+
+    const filtered = filterPRs(scopedList, searchQuery);
 
     // Group & Sort:
     // 1. Group by organization (owner) sorted strictly alphabetically by name
@@ -128,6 +160,7 @@ export function createTUI(
     isDetailsModalOpen = false;
     isLogsModalOpen = false;
     isSettingsModalOpen = false;
+    isStatsModalOpen = false;
     diffScrollOffset = 0;
 
     const cacheKey = `${pr.key.owner}/${pr.key.repo}#${pr.key.number}`;
@@ -170,6 +203,7 @@ export function createTUI(
     isDetailsModalOpen = false;
     isDiffModalOpen = false;
     isSettingsModalOpen = false;
+    isStatsModalOpen = false;
 
     const layout = calculateLayout(process.stdout.columns, process.stdout.rows);
     const bodyHeight = Math.max(2, layout.bodyHeight - 2);
@@ -209,8 +243,25 @@ export function createTUI(
         })
       );
 
-      // 3. Divider & Search Bar
+      // 3. Scope Tab Bar & Search Bar
+      const allPrsList = Array.from(data.prs.values());
+      const userLower = data.currentUser?.toLowerCase();
+      const mineCount = allPrsList.filter(
+        (p) => p.scope === 'mine' || p.scope === 'both' || (userLower && p.author.toLowerCase() === userLower) || !p.scope
+      ).length;
+      const teamCount = allPrsList.filter((p) => p.scope === 'team' || p.scope === 'both').length;
+
       allLines.push(renderDivider(layout.width));
+      allLines.push(
+        renderScopeTabBar({
+          scope: data.viewScope || 'mine',
+          mineCount,
+          teamCount,
+          teamMembersCount: data.teamMembers?.length,
+          teamName: data.settings.team,
+          width: Math.max(10, layout.width - 2),
+        })
+      );
       allLines.push(renderSearchBar(searchQuery, footerMode === 'SEARCH', Math.max(10, layout.width - 2)));
       allLines.push(renderDivider(layout.width));
 
@@ -220,8 +271,10 @@ export function createTUI(
         selectedIndex: selectedRow,
         width: layout.width,
         height: layout.bodyHeight,
+        scope: data.viewScope || 'mine',
         currentUser: data.currentUser,
         workers: data.workers,
+        teamProfiles: data.teamProfiles,
         spinnerTick,
       });
       for (let i = 0; i < layout.bodyHeight; i++) {
@@ -242,11 +295,12 @@ export function createTUI(
         message: statusMessage,
       };
       allLines.push(renderFooter(footerContext, Math.max(10, layout.width - 2)));
+      allLines.push(renderDivider(layout.width));
 
       // 6. Details Pop-up Modal Overlay (if open)
       // Anchored directly over the PR table body (below the banner & search bar)
-      if (isDetailsModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen) {
-        const headerOffset = bannerLines.length + 4; // stats(1) + div(1) + search(1) + div(1) = 9 lines
+      if (isDetailsModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isStatsModalOpen) {
+        const headerOffset = bannerLines.length + 5; // stats(1) + div(1) + scope(1) + search(1) + div(1) = 10 lines
         const modalHeight = Math.max(6, layout.bodyHeight);
         const isSmallScreen = layout.width < 90;
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
@@ -274,7 +328,7 @@ export function createTUI(
 
       // 7. Settings Pop-up Modal Overlay (if open)
       if (isSettingsModalOpen) {
-        const headerOffset = bannerLines.length + 4;
+        const headerOffset = bannerLines.length + 5;
         const modalHeight = Math.max(8, layout.bodyHeight);
         const isSmallScreen = layout.width < 90;
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
@@ -302,8 +356,8 @@ export function createTUI(
       }
 
       // 8. Diff Pop-up Modal Overlay (if open)
-      if (isDiffModalOpen && selectedPR && !isSettingsModalOpen && !isLogsModalOpen) {
-        const headerOffset = bannerLines.length + 4;
+      if (isDiffModalOpen && selectedPR && !isSettingsModalOpen && !isLogsModalOpen && !isStatsModalOpen) {
+        const headerOffset = bannerLines.length + 5;
         const modalHeight = Math.max(6, layout.bodyHeight);
         const isSmallScreen = layout.width < 90;
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
@@ -332,8 +386,8 @@ export function createTUI(
       }
 
       // 9. Logs Pop-up Modal Overlay (if open)
-      if (isLogsModalOpen && selectedPR && !isSettingsModalOpen) {
-        const headerOffset = bannerLines.length + 4;
+      if (isLogsModalOpen && selectedPR && !isSettingsModalOpen && !isStatsModalOpen) {
+        const headerOffset = bannerLines.length + 5;
         const modalHeight = Math.max(6, layout.bodyHeight);
         const isSmallScreen = layout.width < 90;
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
@@ -349,6 +403,88 @@ export function createTUI(
           modalWidth,
           modalHeight,
           scrollOffset: logsScrollOffset,
+          spinnerTick,
+        });
+
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
+        }
+      }
+
+      // 10. Stats Pop-up Modal Overlay (if open)
+      if (isStatsModalOpen && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isDetailsModalOpen) {
+        const headerOffset = bannerLines.length + 5;
+        const modalHeight = Math.max(8, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+
+        const stats = calculateStats(data, '30d', data.viewScope || 'mine', statsSortBy);
+        const modalLines = renderStatsModal({
+          stats,
+          scope: data.viewScope || 'mine',
+          sortBy: statsSortBy,
+          teamName: data.settings.team,
+          modalWidth,
+          modalHeight,
+        });
+
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
+        }
+      }
+
+      // 11. All Actions & Help Pop-up Modal Overlay (if open)
+      if (isHelpModalOpen && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isDetailsModalOpen && !isStatsModalOpen && !isBackfillModalOpen) {
+        const headerOffset = bannerLines.length + 5;
+        const modalHeight = Math.max(8, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+
+        const modalLines = renderHelpModal({
+          modalWidth,
+          modalHeight,
+        });
+
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
+        }
+      }
+
+      // 12. Backfill Progress Modal Overlay (if open)
+      if (isBackfillModalOpen && backfillProgress && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isDetailsModalOpen) {
+        const headerOffset = bannerLines.length + 5;
+        const modalHeight = Math.max(8, layout.bodyHeight);
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
+
+        const modalLines = renderBackfillModal({
+          progress: backfillProgress,
+          modalWidth,
+          modalHeight,
           spinnerTick,
         });
 
@@ -464,6 +600,8 @@ export function createTUI(
             const item = SETTINGS_ITEMS[settingsIndex];
             if (item.id === 'searchQuery') {
               data.settings.searchQuery = settingInputBuffer.trim();
+            } else if (item.id === 'team') {
+              data.settings.team = settingInputBuffer.trim() || undefined;
             } else if (item.id === 'streamdeckPort') {
               const portNum = parseInt(settingInputBuffer.trim(), 10);
               if (!isNaN(portNum) && portNum > 0 && portNum < 65536) {
@@ -513,10 +651,12 @@ export function createTUI(
 
         const item = SETTINGS_ITEMS[settingsIndex];
 
-        if (key === '\x0d' && (item.id === 'searchQuery' || item.id === 'streamdeckPort')) { // Enter to edit text
+        if (key === '\x0d' && (item.id === 'searchQuery' || item.id === 'team' || item.id === 'streamdeckPort')) { // Enter to edit text
           isEditingSetting = true;
           settingInputBuffer = item.id === 'searchQuery'
-            ? data.settings.searchQuery
+            ? (data.settings.searchQuery || '')
+            : item.id === 'team'
+            ? (data.settings.team || '')
             : String(data.extensions.streamdeck.port);
           render();
           return;
@@ -550,6 +690,112 @@ export function createTUI(
           render();
           return;
         }
+        return;
+      }
+
+      const triggerBackfill = (timeframeDays: number = 90) => {
+        isBackfillModalOpen = true;
+        isStatsModalOpen = false;
+        isHelpModalOpen = false;
+        isSettingsModalOpen = false;
+        isDiffModalOpen = false;
+        isLogsModalOpen = false;
+        isDetailsModalOpen = false;
+        backfillProgress = {
+          currentMember: data.currentUser || 'zepedrosilva',
+          memberIndex: 0,
+          totalMembers: (data.teamMembers?.length || 0) + 1,
+          prsFound: 0,
+          totalPRs: 0,
+          timeframeDays,
+          status: 'starting',
+          log: [`Starting ${timeframeDays}-day PR history backfill...`],
+        };
+        render();
+
+        backfillHistoricalStats(data, timeframeDays, (p) => {
+          backfillProgress = p;
+          render();
+        }).then(() => {
+          saveState(data);
+          setTimeout(() => {
+            if (isBackfillModalOpen) {
+              isBackfillModalOpen = false;
+              isStatsModalOpen = true;
+              render();
+            }
+          }, 1000);
+        }).catch((err) => {
+          if (backfillProgress) {
+            backfillProgress.status = 'error';
+            backfillProgress.log.push(`Error: ${(err as Error).message}`);
+          }
+          render();
+        });
+      };
+
+      // Handle Backfill Progress Modal Keyboard Actions
+      if (isBackfillModalOpen) {
+        if (key === '1') {
+          triggerBackfill(30);
+          return;
+        }
+        if (key === '2') {
+          triggerBackfill(60);
+          return;
+        }
+        if (key === '3') {
+          triggerBackfill(90);
+          return;
+        }
+        if (key === '\x1b' || key === '\x0d' || key === 'q' || key === 'Q') {
+          isBackfillModalOpen = false;
+          isStatsModalOpen = true;
+          render();
+          return;
+        }
+        return;
+      }
+
+      // Handle All Actions & Help Modal Keyboard Actions
+      if (isHelpModalOpen) {
+        if (key === '\x1b' || key === '?' || key === 'h' || key === 'H' || key === 'q' || key === 'Q' || key === '\x0d') {
+          isHelpModalOpen = false;
+          render();
+          return;
+        }
+        return;
+      }
+
+      // Handle Stats Pop-up Modal Keyboard Actions
+      if (isStatsModalOpen) {
+        if (key === '\x1b' || key === 'q' || key === 'Q' || key === 'p' || key === 'P' || key === '\x0d') { // Esc, Enter, q, p closes stats
+          isStatsModalOpen = false;
+          render();
+          return;
+        }
+
+        if (key === 'b' || key === 'B') {
+          triggerBackfill();
+          return;
+        }
+
+        if (key === 's' || key === 'S') { // s cycles leaderboard sort
+          const sortCriteria: LeaderboardSort[] = ['merged30', 'merged60', 'merged90', 'total', 'comments', 'stale'];
+          const idx = sortCriteria.indexOf(statsSortBy);
+          statsSortBy = sortCriteria[(idx + 1) % sortCriteria.length];
+          render();
+          return;
+        }
+
+        if (key === '\t' || key === 't' || key === 'T') { // Tab or t toggles scope
+          data.viewScope = data.viewScope === 'team' ? 'mine' : 'team';
+          selectedRow = 0;
+          saveState(data);
+          render();
+          return;
+        }
+
         return;
       }
 
@@ -999,9 +1245,65 @@ export function createTUI(
         return;
       }
 
+      if (key === '\t' || key === 't') { // Tab or t: Toggle Scope
+        data.viewScope = data.viewScope === 'team' ? 'mine' : 'team';
+        selectedRow = 0;
+        saveState(data);
+        render();
+        return;
+      }
+
+      if (key === '1') { // 1: Mine Scope
+        data.viewScope = 'mine';
+        selectedRow = 0;
+        saveState(data);
+        render();
+        return;
+      }
+
+      if (key === '2') { // 2: Team Scope
+        data.viewScope = 'team';
+        selectedRow = 0;
+        saveState(data);
+        render();
+        return;
+      }
+
+      if (key === 'p' || key === 'P' || key === 'S') { // p: Open Stats Modal
+        isStatsModalOpen = true;
+        isDetailsModalOpen = false;
+        isSettingsModalOpen = false;
+        isDiffModalOpen = false;
+        isLogsModalOpen = false;
+        isHelpModalOpen = false;
+        isBackfillModalOpen = false;
+        render();
+        return;
+      }
+
+      if (key === '?' || key === 'h' || key === 'H') { // ? / h: All Actions & Help Modal
+        isHelpModalOpen = true;
+        isStatsModalOpen = false;
+        isDetailsModalOpen = false;
+        isSettingsModalOpen = false;
+        isDiffModalOpen = false;
+        isLogsModalOpen = false;
+        isBackfillModalOpen = false;
+        render();
+        return;
+      }
+
+      if (key === 'b' || key === 'B') { // b: Trigger On-Demand 30-day Backfill
+        triggerBackfill();
+        return;
+      }
+
       if (key === 's') { // Settings Modal
         isSettingsModalOpen = true;
         isDetailsModalOpen = false;
+        isStatsModalOpen = false;
+        isHelpModalOpen = false;
+        isBackfillModalOpen = false;
         settingsIndex = 0;
         isEditingSetting = false;
         settingInputBuffer = '';
