@@ -12,19 +12,25 @@ import { renderBanner, renderStatsBar, renderDivider } from '../src/tui/banner.j
 import { renderTable } from '../src/tui/table.js';
 import { renderDetails, renderDetailsModal } from '../src/tui/details.js';
 import { renderSettingsModal } from '../src/tui/settings.js';
+import { renderBackfillModal } from '../src/tui/backfill.js';
+import { renderStatsModal } from '../src/tui/stats.js';
+import { renderHelpModal } from '../src/tui/help.js';
+import { renderDiffModal } from '../src/tui/diff.js';
+import { renderLogsModal } from '../src/tui/logs.js';
 import { renderFooter } from '../src/tui/footer.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
+import { calculateStats } from '../src/stats/index.js';
 import type { PrState } from '../src/app/types.js';
 
 describe('TUI Components & Engine', () => {
   function createMockPR(number: number, status: PrState['overallStatus'] = 'Ready'): PrState {
     return {
-      key: { owner: 'acme-corp', repo: 'billing', number },
+      key: { owner: 'acme-corp', repo: 'web-frontend', number },
       title: `Feature invoice calculations #${number}`,
       branch: `feat/invoice-${number}`,
       baseBranch: 'main',
-      author: 'josesilva',
-      url: `https://github.com/acme-corp/billing/pull/${number}`,
+      author: 'alice',
+      url: `https://github.com/acme-corp/web-frontend/pull/${number}`,
       isDraft: false,
       state: 'OPEN',
       reviewVerdict: 'APPROVED',
@@ -177,7 +183,7 @@ describe('TUI Components & Engine', () => {
       expect(stripAnsi(lines[0])).toContain('REPO');
       expect(stripAnsi(lines[1])).toContain('acme-corp');
       expect(stripAnsi(lines[2])).toContain('Ready');
-      expect(stripAnsi(lines[2])).toContain('billing');
+      expect(stripAnsi(lines[2])).toContain('web-frontend');
       expect(stripAnsi(lines[2])).toContain('#142');
     });
 
@@ -198,7 +204,7 @@ describe('TUI Components & Engine', () => {
       const fullText = lines.map(stripAnsi).join('\n');
       expect(fullText).toContain('🏢 acme-corp (1)');
       expect(fullText).toContain('👤 zepedrosilva (1)');
-      expect(fullText).toContain('billing');
+      expect(fullText).toContain('web-frontend');
       expect(fullText).toContain('overseer');
     });
 
@@ -233,6 +239,32 @@ describe('TUI Components & Engine', () => {
       expect(lines[5]).not.toContain('▎');
     });
 
+    it('renders dedicated AUTHOR column when scope is team', () => {
+      const pr = createMockPR(101, 'Ready');
+      pr.author = 'bob';
+
+      const teamLines = renderTable({
+        prs: [pr],
+        selectedIndex: 0,
+        width: 100,
+        height: 5,
+        scope: 'team',
+      });
+
+      expect(stripAnsi(teamLines[0])).toContain('AUTHOR');
+      expect(stripAnsi(teamLines[2])).toContain('bob');
+
+      const mineLines = renderTable({
+        prs: [pr],
+        selectedIndex: 0,
+        width: 100,
+        height: 5,
+        scope: 'mine',
+      });
+
+      expect(stripAnsi(mineLines[0])).not.toContain('AUTHOR');
+    });
+
     it('renders animated spinner in CI column when CI check runs are pending', async () => {
       const { ciIcon, getSpinnerChar } = await import('../src/tui/colors.js');
       expect(ciIcon('PENDING', 2)).toBe(getSpinnerChar(2));
@@ -257,7 +289,7 @@ describe('TUI Components & Engine', () => {
 
       expect(lines).toHaveLength(20);
       const fullText = lines.map(stripAnsi).join('\n');
-      expect(fullText).toContain('PR Details: acme-corp/billing#142');
+      expect(fullText).toContain('PR Details: acme-corp/web-frontend#142');
       expect(fullText).toContain('Review: APPROVED');
       expect(fullText).toContain('Reviewers & Approvals');
       expect(fullText).toContain('CI Checks (2)');
@@ -288,16 +320,50 @@ describe('TUI Components & Engine', () => {
   });
 
   describe('Footer Actions & Modals', () => {
-    it('renders standard keybinding hints with details and open', () => {
-      const footer = renderFooter({ mode: 'NORMAL', selectedPR: null, inputBuffer: '' }, 150);
+    it('renders streamlined core keybinding hints with [?] all actions', () => {
+      const footer = renderFooter({ mode: 'NORMAL', selectedPR: null, inputBuffer: '' }, 180);
       const text = stripAnsi(footer);
       expect(text).toContain('[Enter] details');
-      expect(text).toContain('[s] settings');
-      expect(text).toContain('[o] open');
-      expect(text).toContain('[m] merge');
-      expect(text).toContain('[a] agent');
-      expect(text).toContain('[c] comment');
+      expect(text).toContain('[Tab] scope');
+      expect(text).toContain('[p] stats');
+      expect(text).toContain('[?] all actions');
       expect(text).toContain('[q] quit');
+    });
+
+    it('renders All Actions Help modal with categorized commands', async () => {
+      const { renderHelpModal } = await import('../src/tui/help.js');
+      const lines = renderHelpModal({ modalWidth: 90, modalHeight: 20 });
+      const fullText = stripAnsi(lines.join('\n'));
+      expect(fullText).toContain('All Actions & Keybindings');
+      expect(fullText).toContain('Navigation & Scope');
+      expect(fullText).toContain('PR Triage & Operations');
+      expect(fullText).toContain('AI Agents & Background Worktrees');
+      expect(fullText).toContain('Performance & Configuration');
+      expect(fullText).toContain('[? / h]');
+      expect(fullText).toContain('[b / B]');
+    });
+
+    it('renders Backfill Progress modal with live status and log', async () => {
+      const { renderBackfillModal } = await import('../src/tui/backfill.js');
+      const lines = renderBackfillModal({
+        progress: {
+          currentMember: 'Bob Dylan (@bob)',
+          memberIndex: 2,
+          totalMembers: 12,
+          prsFound: 25,
+          totalPRs: 50,
+          timeframeDays: 90,
+          status: 'in_progress',
+          log: ['Querying 90d PRs for Bob Dylan (@bob)...'],
+        },
+        modalWidth: 80,
+        modalHeight: 16,
+      });
+      const fullText = stripAnsi(lines.join('\n'));
+      expect(fullText).toContain('Backfilling 90-Day PR History');
+      expect(fullText).toContain('Bob Dylan (@bob)');
+      expect(fullText).toContain('50 PRs stored');
+      expect(fullText).toContain('Activity Log');
     });
 
     it('adaptively collapses footer hints on narrow screens to prevent line wrapping', () => {
@@ -305,7 +371,7 @@ describe('TUI Components & Engine', () => {
       expect(visualLength(footer)).toBe(38);
       const text = stripAnsi(footer);
       expect(text).toContain('[Enter]');
-      expect(text).toContain('[s]');
+      expect(text).toContain('[Tab]');
     });
 
     it('renders confirmation modals for merge and close', () => {
@@ -341,7 +407,7 @@ describe('TUI Components & Engine', () => {
         availableAgents: ['claude', 'agy', 'pi', 'moxly'],
       }, 100);
       const text = stripAnsi(selectFooter);
-      expect(text).toContain('Agent for billing:');
+      expect(text).toContain('Agent for web-frontend:');
       expect(text).toContain('[1] claude');
       expect(text).toContain('[2] agy');
       expect(text).toContain('[3] pi');
@@ -370,6 +436,126 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('[EXTENSIONS]');
       expect(fullText).toContain('Stream Deck Server');
       expect(fullText).toContain('[Esc to save & close]');
+    });
+  });
+
+  describe('Modal Box Frames & 4-Corner Trace Integrity (All 7 Modals)', () => {
+    const pr = createMockPR(42);
+    const state = createEmptyState();
+    upsertPR(state, pr);
+    const stats = calculateStats(state, '30d', 'mine');
+
+    const testModalGeometry = (name: string, lines: string[], expectedWidth: number, expectedHeight: number) => {
+      expect(lines.length, `${name} line count must match expected height`).toBe(expectedHeight);
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const vLen = visualLength(line);
+        expect(vLen, `${name} row ${i} visualLength (${vLen}) must strictly equal modalWidth (${expectedWidth})`).toBe(expectedWidth);
+      }
+
+      // Check Top Border
+      const top = stripAnsi(lines[0]);
+      expect(top.startsWith('┌─'), `${name} top border must start with ┌─`).toBe(true);
+      expect(top.endsWith('─┐'), `${name} top border must end with ─┐`).toBe(true);
+
+      // Check Bottom Border
+      const bottom = stripAnsi(lines[lines.length - 1]);
+      expect(bottom.startsWith('└─'), `${name} bottom border must start with └─`).toBe(true);
+      expect(bottom.endsWith('─┘'), `${name} bottom border must end with ─┘`).toBe(true);
+
+      // Check Middle Rows
+      for (let i = 1; i < lines.length - 1; i++) {
+        const mid = stripAnsi(lines[i]);
+        if (mid.startsWith('├─')) {
+          expect(mid.endsWith('─┤'), `${name} divider at line ${i} must end with ─┤`).toBe(true);
+        } else {
+          expect(mid.startsWith('│'), `${name} content row at line ${i} must start with │`).toBe(true);
+          expect(mid.endsWith('│'), `${name} content row at line ${i} must end with │`).toBe(true);
+        }
+      }
+    };
+
+    it('validates 1. Backfill Progress Modal frame trace', () => {
+      const lines = renderBackfillModal({
+        progress: {
+          currentMember: 'Alice',
+          memberIndex: 1,
+          totalMembers: 5,
+          prsFound: 10,
+          totalPRs: 50,
+          timeframeDays: 90,
+          status: 'in_progress',
+          log: ['Querying...'],
+        },
+        modalWidth: 90,
+        modalHeight: 18,
+      });
+      testModalGeometry('BackfillModal', lines, 90, 18);
+    });
+
+    it('validates 2. Stats & Leaderboard Modal frame trace', () => {
+      const lines = renderStatsModal({
+        stats,
+        scope: 'team',
+        sortBy: 'merged',
+        teamName: 'platform-core',
+        modalWidth: 100,
+        modalHeight: 22,
+      });
+      testModalGeometry('StatsModal', lines, 100, 22);
+    });
+
+    it('validates 3. Details Modal frame trace', () => {
+      const lines = renderDetailsModal({
+        pr,
+        modalWidth: 92,
+        modalHeight: 20,
+        scrollOffset: 0,
+      });
+      testModalGeometry('DetailsModal', lines, 92, 20);
+    });
+
+    it('validates 4. All Actions & Help Modal frame trace', () => {
+      const lines = renderHelpModal({
+        modalWidth: 88,
+        modalHeight: 28,
+      });
+      testModalGeometry('HelpModal', lines, 88, 28);
+    });
+
+    it('validates 5. Settings Modal frame trace', () => {
+      const lines = renderSettingsModal({
+        state,
+        selectedIndex: 0,
+        isEditingText: false,
+        editBuffer: '',
+        modalWidth: 86,
+        modalHeight: 18,
+      });
+      testModalGeometry('SettingsModal', lines, 86, 18);
+    });
+
+    it('validates 6. Diff Modal frame trace', () => {
+      const lines = renderDiffModal({
+        pr,
+        diffText: 'diff --git a/file.ts b/file.ts\n+added line\n-removed line',
+        modalWidth: 96,
+        modalHeight: 20,
+        scrollOffset: 0,
+      });
+      testModalGeometry('DiffModal', lines, 96, 20);
+    });
+
+    it('validates 7. Logs Modal frame trace', () => {
+      const lines = renderLogsModal({
+        pr,
+        logLines: ['[10:00:00] Worker started', '[10:01:00] Completed'],
+        modalWidth: 94,
+        modalHeight: 18,
+        scrollOffset: 0,
+      });
+      testModalGeometry('LogsModal', lines, 94, 18);
     });
   });
 });

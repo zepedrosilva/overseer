@@ -8,12 +8,12 @@ import { prKeyToString } from '../src/app/types.js';
 describe('Agent Logs Modal & Table Worker Indicators', () => {
   function createMockPR(): PrState {
     return {
-      key: { owner: 'acme-corp', repo: 'billing', number: 142 },
+      key: { owner: 'acme-corp', repo: 'web-frontend', number: 142 },
       title: 'Fix invoice rounding calculations',
       branch: 'fix/rounding',
       baseBranch: 'main',
-      author: 'josesilva',
-      url: 'https://github.com/acme-corp/billing/pull/142',
+      author: 'alice',
+      url: 'https://github.com/acme-corp/web-frontend/pull/142',
       isDraft: false,
       state: 'OPEN',
       reviewVerdict: 'APPROVED',
@@ -75,7 +75,7 @@ describe('Agent Logs Modal & Table Worker Indicators', () => {
       }
 
       const fullText = lines.map(stripAnsi).join('\n');
-      expect(fullText).toContain('billing#142');
+      expect(fullText).toContain('web-frontend#142');
       expect(fullText).toContain('Running: claude');
       expect(fullText).toContain('[j/k] scroll');
       expect(fullText).toContain('[Esc to close]');
@@ -141,7 +141,7 @@ describe('Agent Logs Modal & Table Worker Indicators', () => {
       expect(stripAnsi(lines[1])).toContain('acme-corp');
       const rowText = stripAnsi(lines[2]);
       expect(rowText).toContain('claude');
-      expect(rowText).toContain('billing');
+      expect(rowText).toContain('web-frontend');
       expect(rowText).toContain('#142');
     });
   });

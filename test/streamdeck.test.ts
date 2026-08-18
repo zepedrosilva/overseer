@@ -14,12 +14,12 @@ describe('Stream Deck HTTP & SSE Server', () => {
 
   function createMockPR(): PrState {
     return {
-      key: { owner: 'acme-corp', repo: 'billing', number: 142 },
+      key: { owner: 'acme-corp', repo: 'web-frontend', number: 142 },
       title: 'Fix invoice rounding calculations',
       branch: 'fix/invoice-rounding',
       baseBranch: 'main',
-      author: 'josesilva',
-      url: 'https://github.com/acme-corp/billing/pull/142',
+      author: 'alice',
+      url: 'https://github.com/acme-corp/web-frontend/pull/142',
       isDraft: false,
       state: 'OPEN',
       reviewVerdict: 'APPROVED',
@@ -84,7 +84,7 @@ describe('Stream Deck HTTP & SSE Server', () => {
 
   beforeEach(() => {
     state = createEmptyState();
-    state.repos = [{ owner: 'acme-corp', repo: 'billing', url: 'https://github.com/acme-corp/billing', agent: 'claude' }];
+    state.repos = [{ owner: 'acme-corp', repo: 'web-frontend', url: 'https://github.com/acme-corp/web-frontend', agent: 'claude' }];
     upsertPR(state, createMockPR());
   });
 
@@ -104,7 +104,7 @@ describe('Stream Deck HTTP & SSE Server', () => {
     expect(res.parsed.prsCount).toBe(1);
     expect(res.parsed.needsAttentionCount).toBe(0);
     expect(res.parsed.items[0]).toEqual({
-      id: 'acme-corp/billing#142',
+      id: 'acme-corp/web-frontend#142',
       title: 'Fix invoice rounding calculations',
       status: 'Ready',
       ci: 'SUCCESS',
@@ -117,14 +117,14 @@ describe('Stream Deck HTTP & SSE Server', () => {
     serverController = startStreamDeckServer(state, 0);
     serverPort = serverController.port;
 
-    const res = await makeRequest('GET', '/pr/acme-corp/billing/142', serverPort);
+    const res = await makeRequest('GET', '/pr/acme-corp/web-frontend/142', serverPort);
     expect(res.status).toBe(200);
-    expect(res.parsed.id).toBe('acme-corp/billing#142');
+    expect(res.parsed.id).toBe('acme-corp/web-frontend#142');
     expect(res.parsed.title).toBe('Fix invoice rounding calculations');
     expect(res.parsed.status).toBe('Ready');
     expect(res.parsed.ciChecks).toHaveLength(1);
 
-    const notFound = await makeRequest('GET', '/pr/acme-corp/billing/999', serverPort);
+    const notFound = await makeRequest('GET', '/pr/acme-corp/web-frontend/999', serverPort);
     expect(notFound.status).toBe(404);
   });
 
@@ -134,14 +134,14 @@ describe('Stream Deck HTTP & SSE Server', () => {
     serverPort = serverController.port;
 
     const res = await makeRequest('POST', '/action/recheck', serverPort, {
-      id: 'acme-corp/billing#142',
+      id: 'acme-corp/web-frontend#142',
     });
 
     expect(res.status).toBe(200);
     expect(res.parsed.ok).toBe(true);
     expect(res.parsed.action).toBe('recheck');
     expect(actionCallback).toHaveBeenCalledWith('recheck', {
-      id: 'acme-corp/billing#142',
+      id: 'acme-corp/web-frontend#142',
       pr: expect.objectContaining({ title: 'Fix invoice rounding calculations' }),
     });
   });

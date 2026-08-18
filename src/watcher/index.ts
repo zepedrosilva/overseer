@@ -6,8 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AppState, AppConfig, RepoHandle, PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir } from '../app/state.js';
-import { runGraphQL } from './gh.js';
+import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
+import { runGraphQL, fetchTeamMembers } from './gh.js';
 import {
   buildBatchPRQuery,
   parseGraphQLBatchResponse,
@@ -103,16 +103,20 @@ export async function pollAllRepos(
 
   try {
     if (isSearchMode) {
-      const user = data.currentUser || config.defaults.user;
+      const user = data.currentUser || config.defaults?.user;
+      const teamSlug = data.settings?.team || config.defaults?.team;
+
+      // 1. Personal Query
       const queryStr = config.defaults.search_query
         || (user && user !== 'unknown' ? `is:pr is:open involves:${user}` : 'is:pr is:open involves:@me');
 
       const parsedPrs = await fetchSearchPrs(queryStr, filterOptions, config.defaults.agent);
+      const stagedPrs = new Map<string, PrState>();
       const discoveredRepos = new Map<string, RepoHandle>();
 
       for (const pr of parsedPrs) {
         const keyStr = prKeyToString(pr.key);
-        seenPrKeys.add(keyStr);
+        stagedPrs.set(keyStr, pr);
 
         const repoKey = `${pr.key.owner.toLowerCase()}/${pr.key.repo.toLowerCase()}`;
         if (!discoveredRepos.has(repoKey)) {
@@ -123,20 +127,101 @@ export async function pollAllRepos(
             agent: config.defaults.agent,
           });
         }
+      }
+
+      // 2. Team Query (if team slug/members configured)
+      if (teamSlug) {
+        if (!data.teamMembers || data.teamMembers.length === 0) {
+          const fetched = await fetchTeamMembers(teamSlug);
+          if (fetched.length > 0) {
+            data.teamMembers = fetched;
+          }
+        }
+
+        const teamFilterOpts: ParseGraphQLBatchOptions = {
+          ...filterOptions,
+          team: teamSlug,
+          isTeamQuery: true,
+        };
+        const teamQuery = teamSlug.includes('/') ? `is:pr is:open team:${teamSlug}` : `is:pr is:open ${teamSlug}`;
+
+        // Also query PRs for team members (combined into chunked search queries for high throughput)
+        const memberLogins = (data.teamMembers || []).filter(
+          (m) => m.toLowerCase() !== (data.currentUser || '').toLowerCase()
+        );
+
+        const memberQueries: string[] = [];
+        if (memberLogins.length > 0) {
+          // Batch up to 12 members per involves: query
+          for (let i = 0; i < memberLogins.length; i += 12) {
+            const chunk = memberLogins.slice(i, i + 12);
+            const chunkQuery = `is:pr is:open ${chunk.map((m) => `involves:${m}`).join(' ')}`;
+            memberQueries.push(chunkQuery);
+          }
+        }
+
+        // Fetch team query and member chunk queries concurrently in parallel
+        const allTeamFetchPromises = [
+          fetchSearchPrs(teamQuery, teamFilterOpts, config.defaults.agent),
+          ...memberQueries.map((q) => fetchSearchPrs(q, teamFilterOpts, config.defaults.agent)),
+        ];
+
+        const fetchResults = await Promise.all(allTeamFetchPromises);
+        const teamPrs: PrState[] = [];
+        const seenTeamKeys = new Set<string>();
+
+        for (const batch of fetchResults) {
+          for (const pr of batch) {
+            const keyStr = prKeyToString(pr.key);
+            if (!seenTeamKeys.has(keyStr)) {
+              seenTeamKeys.add(keyStr);
+              teamPrs.push(pr);
+            }
+          }
+        }
+
+        for (const pr of teamPrs) {
+          const keyStr = prKeyToString(pr.key);
+          const existingStaged = stagedPrs.get(keyStr);
+          if (existingStaged) {
+            existingStaged.scope = 'both';
+          } else {
+            stagedPrs.set(keyStr, {
+              ...pr,
+              scope: 'team',
+            });
+          }
+
+          const repoKey = `${pr.key.owner.toLowerCase()}/${pr.key.repo.toLowerCase()}`;
+          if (!discoveredRepos.has(repoKey)) {
+            discoveredRepos.set(repoKey, {
+              owner: pr.key.owner,
+              repo: pr.key.repo,
+              url: `https://github.com/${pr.key.owner}/${pr.key.repo}`,
+              agent: config.defaults.agent,
+            });
+          }
+        }
+      }
+
+      // 3. Atomically apply all staged PRs to state after successful fetches
+      for (const [keyStr, pr] of stagedPrs.entries()) {
+        seenPrKeys.add(keyStr);
 
         const existing = data.prs.get(keyStr);
         const previousStatus = existing?.overallStatus;
 
         const mergedPR: PrState = {
           ...pr,
+          scope: existing?.scope === 'mine' && pr.scope === 'team' ? 'both' : pr.scope,
           agent: existing?.agent || pr.agent || config.defaults.agent,
           log: existing?.log || [],
           logOffset: existing?.logOffset || 0,
         };
 
         upsertPR(data, mergedPR);
+        recordHistoricalPr(data, mergedPR);
 
-        // If status changed or this is first discovery, append log
         if (!existing) {
           appendLog(
             data,
@@ -157,13 +242,11 @@ export async function pollAllRepos(
         data.repos = Array.from(discoveredRepos.values());
       }
 
-      // Detect PRs that are no longer open
+      // Detect PRs that are no longer open and prune from active triage list
       for (const [keyStr, pr] of data.prs.entries()) {
         if (!seenPrKeys.has(keyStr)) {
-          if (pr.overallStatus !== 'Merged' && pr.overallStatus !== 'Closed') {
-            updatePRStatus(data, pr.key, 'Closed', { statusDetail: 'PR closed or merged on GitHub' });
-            appendLog(data, pr.key, 'PR no longer open on GitHub (marked Closed)');
-          }
+          recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+          data.prs.delete(keyStr);
         }
       }
     } else {
@@ -189,6 +272,7 @@ export async function pollAllRepos(
             };
 
             upsertPR(data, mergedPR);
+            recordHistoricalPr(data, mergedPR);
 
             // If status changed or this is first discovery, append log
             if (!existing) {
@@ -216,10 +300,8 @@ export async function pollAllRepos(
       for (const [keyStr, pr] of data.prs.entries()) {
         const repoIdentifier = `${pr.key.owner.toLowerCase()}/${pr.key.repo.toLowerCase()}`;
         if (monitoredRepoKeys.has(repoIdentifier) && !seenPrKeys.has(keyStr)) {
-          if (pr.overallStatus !== 'Merged' && pr.overallStatus !== 'Closed') {
-            updatePRStatus(data, pr.key, 'Closed', { statusDetail: 'PR closed or merged on GitHub' });
-            appendLog(data, pr.key, 'PR no longer open on GitHub (marked Closed)');
-          }
+          recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+          data.prs.delete(keyStr);
         }
       }
     }
