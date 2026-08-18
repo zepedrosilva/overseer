@@ -74,19 +74,12 @@ export function renderFooter(context: FooterContext, width: number): string {
     return padEndVisual(text, safeWidth);
   }
 
-  // Normal mode: adaptively fit keybinding hints based on safeWidth
+  // Normal mode: minimal core actions + [?] all actions
   const candidateKeys = [
     { key: 'Enter', label: 'details' },
-    { key: 's', label: 'settings' },
-    { key: 'o', label: 'open' },
-    { key: 'm', label: 'merge' },
-    { key: 'a', label: 'agent' },
-    { key: 'c', label: 'comment' },
-    { key: 'd', label: 'diff' },
-    { key: 'L', label: 'logs' },
-    { key: 'x', label: 'close' },
-    { key: 'R', label: 'recheck' },
-    { key: '/', label: 'filter' },
+    { key: 'Tab', label: 'scope' },
+    { key: 'p', label: 'stats' },
+    { key: '?', label: 'all actions' },
     { key: 'q', label: 'quit' },
   ];
 

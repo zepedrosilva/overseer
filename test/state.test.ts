@@ -44,8 +44,8 @@ describe('State Store & Persistence', () => {
       title: 'Fix issue with billing rounding',
       branch: 'fix/rounding',
       baseBranch: 'main',
-      author: 'josesilva',
-      url: 'https://github.com/acme-corp/billing/pull/142',
+      author: 'alice',
+      url: 'https://github.com/acme-corp/web-frontend/pull/142',
       isDraft: false,
       state: 'OPEN',
       reviewVerdict: 'APPROVED',
@@ -85,8 +85,8 @@ describe('State Store & Persistence', () => {
 
     it('persists and restores PRs and workers correctly', () => {
       const state = createEmptyState({ dryRun: false });
-      const pr1 = createMockPR({ owner: 'acme-corp', repo: 'billing', number: 142 }, 'Ready');
-      const pr2 = createMockPR({ owner: 'acme-corp', repo: 'meridian', number: 88 }, 'ChangesRequested');
+      const pr1 = createMockPR({ owner: 'acme-corp', repo: 'web-frontend', number: 142 }, 'Ready');
+      const pr2 = createMockPR({ owner: 'acme-corp', repo: 'api-gateway', number: 88 }, 'ChangesRequested');
 
       upsertPR(state, pr1);
       upsertPR(state, pr2);
@@ -214,10 +214,10 @@ describe('State Store & Persistence', () => {
 
     it('manages repo-specific agents and available agent lists', () => {
       const state = createEmptyState();
-      expect(getRepoAgent(state, { owner: 'acme-corp', repo: 'billing' })).toBe('claude');
+      expect(getRepoAgent(state, { owner: 'acme-corp', repo: 'web-frontend' })).toBe('claude');
 
-      setRepoAgent(state, { owner: 'acme-corp', repo: 'billing' }, 'agy');
-      expect(getRepoAgent(state, { owner: 'acme-corp', repo: 'billing' })).toBe('agy');
+      setRepoAgent(state, { owner: 'acme-corp', repo: 'web-frontend' }, 'agy');
+      expect(getRepoAgent(state, { owner: 'acme-corp', repo: 'web-frontend' })).toBe('agy');
 
       const agents = getAvailableAgents(state);
       expect(agents).toContain('claude');

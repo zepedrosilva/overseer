@@ -20,7 +20,8 @@ export const SETTINGS_ITEMS = [
   { id: 'pollInterval', label: 'Poll Interval', section: 'DEFAULTS' },
   { id: 'filterUserOnly', label: 'Filter Involving @me Only', section: 'DEFAULTS' },
   { id: 'dryRun', label: 'Dry-Run Mode', section: 'DEFAULTS' },
-  { id: 'searchQuery', label: 'Search Query Override', section: 'DEFAULTS' },
+  { id: 'team', label: 'Team Slug / Members', section: 'TEAM & SCOPE' },
+  { id: 'searchQuery', label: 'Search Query Override', section: 'TEAM & SCOPE' },
   { id: 'streamdeckEnabled', label: 'Stream Deck Server', section: 'EXTENSIONS' },
   { id: 'streamdeckPort', label: 'Stream Deck Port', section: 'EXTENSIONS' },
 ] as const;
@@ -28,7 +29,7 @@ export const SETTINGS_ITEMS = [
 export const POLL_INTERVALS = [15, 30, 60, 120, 300];
 
 export function renderSettingsModal(options: SettingsModalOptions): string[] {
-  const { state, selectedIndex, isEditingText, editBuffer, modalWidth = 86, modalHeight = 18 } = options;
+  const { state, selectedIndex, isEditingText, editBuffer, modalWidth = 86, modalHeight = 20 } = options;
   const lines: string[] = [];
 
   const borderColor = rgbColor(colors.cyan);
@@ -75,6 +76,13 @@ export function renderSettingsModal(options: SettingsModalOptions): string[] {
     } else if (item.id === 'pollInterval') {
       const cur = state.settings.pollIntervalSecs || 30;
       valueStr = `\x1B[${rgbColor(colors.cyan)}< ${cur}s >\x1B[0m  \x1B[${rgbColor(colors.fgMuted)}(${POLL_INTERVALS.map((s) => `${s}s`).join(', ')})\x1B[0m`;
+    } else if (item.id === 'team') {
+      if (isSelected && isEditingText) {
+        valueStr = `\x1B[${rgbColor(colors.cyan)}${editBuffer}\x1B[7m \x1B[0m\x1B[0m  \x1B[${rgbColor(colors.fgDim)}[Enter] save\x1B[0m`;
+      } else {
+        const cur = state.settings.team || '(none — personal only)';
+        valueStr = `\x1B[${rgbColor(colors.fg)}${cur}\x1B[0m  \x1B[${rgbColor(colors.fgDim)}[Enter to edit]\x1B[0m`;
+      }
     } else if (item.id === 'filterUserOnly') {
       const cur = state.settings.filterUserOnly;
       valueStr = cur
