@@ -9,7 +9,7 @@ import type { RepoHandle } from '../src/app/types.js';
 
 describe('GraphQL Query Builder & Parser', () => {
   const repos: RepoHandle[] = [
-    { owner: 'acme-corp', repo: 'billing', url: 'https://github.com/acme-corp/billing', agent: 'claude' },
+    { owner: 'acme-corp', repo: 'web-frontend', url: 'https://github.com/acme-corp/web-frontend', agent: 'claude' },
     { owner: 'zepedrosilva', repo: 'overseer', url: 'https://github.com/zepedrosilva/overseer', agent: 'gemini' },
   ];
 
@@ -17,7 +17,7 @@ describe('GraphQL Query Builder & Parser', () => {
     it('builds valid GraphQL document with aliases for each repo', () => {
       const query = buildBatchPRQuery(repos, 25);
       expect(query).toContain('query BatchPullRequests');
-      expect(query).toContain('repo_0: repository(owner: "acme-corp", name: "billing")');
+      expect(query).toContain('repo_0: repository(owner: "acme-corp", name: "web-frontend")');
       expect(query).toContain('repo_1: repository(owner: "zepedrosilva", name: "overseer")');
       expect(query).toContain('first: 25');
       expect(query).toContain('fragment RepoPullRequests on Repository');
@@ -38,12 +38,12 @@ describe('GraphQL Query Builder & Parser', () => {
               {
                 number: 142,
                 title: 'fix: invoice balance calculation',
-                url: 'https://github.com/acme-corp/billing/pull/142',
+                url: 'https://github.com/acme-corp/web-frontend/pull/142',
                 isDraft: false,
                 state: 'OPEN',
                 headRefName: 'fix/invoice-rounding',
                 baseRefName: 'main',
-                author: { login: 'josesilva' },
+                author: { login: 'alice' },
                 createdAt: '2026-08-17T10:00:00Z',
                 updatedAt: '2026-08-17T11:00:00Z',
                 comments: { totalCount: 3 },
@@ -110,7 +110,7 @@ describe('GraphQL Query Builder & Parser', () => {
       expect(result).toHaveLength(2);
 
       const pr1 = result[0];
-      expect(pr1.key).toEqual({ owner: 'acme-corp', repo: 'billing', number: 142 });
+      expect(pr1.key).toEqual({ owner: 'acme-corp', repo: 'web-frontend', number: 142 });
       expect(pr1.title).toBe('fix: invoice balance calculation');
       expect(pr1.overallStatus).toBe('Ready');
       expect(pr1.reviewVerdict).toBe('APPROVED');
@@ -128,9 +128,9 @@ describe('GraphQL Query Builder & Parser', () => {
     });
 
     it('filters PRs to only those relevant to current user when filterUserOnly is enabled', () => {
-      // User josesilva authored PR 142 but not PR 10
+      // User alice authored PR 142 but not PR 10
       const filtered = parseGraphQLBatchResponse(mockResponse, repos, {
-        currentUser: 'josesilva',
+        currentUser: 'alice',
         filterUserOnly: true,
       });
 
@@ -147,11 +147,11 @@ describe('GraphQL Query Builder & Parser', () => {
                 {
                   number: 200,
                   title: 'Security audit',
-                  url: 'https://github.com/acme-corp/billing/pull/200',
+                  url: 'https://github.com/acme-corp/web-frontend/pull/200',
                   state: 'OPEN',
                   author: { login: 'otherdev' },
                   reviewRequests: {
-                    nodes: [{ requestedReviewer: { login: 'josesilva' } }],
+                    nodes: [{ requestedReviewer: { login: 'alice' } }],
                   },
                 },
               ],
@@ -161,7 +161,7 @@ describe('GraphQL Query Builder & Parser', () => {
       };
 
       const filtered = parseGraphQLBatchResponse(reviewReqResponse, [repos[0]], {
-        currentUser: 'josesilva',
+        currentUser: 'alice',
         filterUserOnly: true,
       });
 

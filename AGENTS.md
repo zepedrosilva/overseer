@@ -44,9 +44,10 @@ This repository is monitored and maintained by Antigravity (AGY) and AI pair pro
 - **Automatic Cleanup on Merge/Close**: When a PR is merged or closed, all associated local worktrees and agent execution log files **must be deleted automatically**.
 - **Credential Hygiene**: Never write credentials, raw tokens, or secrets to disk. Rely exclusively on `gh` CLI ambient authentication.
 
-### 3.4 Documentation Maintenance (Strict Requirement)
-- **Always Keep Documentation Synchronized**: Whenever any configuration format, architectural capability, CLI flag, keybinding, or user-facing feature is added or modified, agents **must immediately update `README.md` and `config.example.toml`** within the same task.
-- Never conclude a task leaving user documentation stale, contradictory, or out of sync with actual code behavior.
+### 3.5 Privacy & Zero Proprietary Leakage Standards (Strict Requirement)
+- **Zero Proprietary Data in Code/Docs/Tests**: Never hardcode, commit, or reference private company/organization names, internal team slugs, internal repository names, internal URLs, or real colleague names/usernames in source code, configuration defaults, unit tests, mock fixtures, git commits, or documentation.
+- **Universal Placeholders**: Always use generic open-source identifiers for mocks, fixtures, and docs (e.g. `acme-corp`, `octocat`, `@alice`, `@bob`, `@charlie`, `web-frontend`, `api-gateway`, `backend-service`).
+- **Zero Default Org Slugs**: `DEFAULT_SETTINGS.team` must always default to an empty string (`team: ''`), allowing users to configure their own team via Settings (<kbd>s</kbd>) or CLI flags.
 
 ---
 

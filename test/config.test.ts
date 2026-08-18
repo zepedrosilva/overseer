@@ -64,7 +64,7 @@ describe('Config & Defaults Engine', () => {
       }, {
         streamdeck: { enabled: true, port: 4000 },
       });
-      setRepoAgent(state, { owner: 'acme-corp', repo: 'billing' }, 'moxly');
+      setRepoAgent(state, { owner: 'acme-corp', repo: 'web-frontend' }, 'moxly');
 
       const statePath = path.join(tmpDir, '.overseer', 'state.json');
       fs.mkdirSync(path.join(tmpDir, '.overseer'), { recursive: true });
@@ -93,9 +93,9 @@ describe('Config & Defaults Engine', () => {
     it('returns repo-specific agent when defined', () => {
       const customConfig = {
         ...DEFAULT_CONFIG,
-        repos: [{ url: 'https://github.com/acme-corp/billing', agent: 'agy' }],
+        repos: [{ url: 'https://github.com/acme-corp/web-frontend', agent: 'agy' }],
       };
-      const agent = getRepoAgent({ owner: 'acme-corp', repo: 'billing' }, customConfig);
+      const agent = getRepoAgent({ owner: 'acme-corp', repo: 'web-frontend' }, customConfig);
       expect(agent).toBe('agy');
     });
   });

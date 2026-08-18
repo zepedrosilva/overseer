@@ -51,6 +51,11 @@ fragment RepoPullRequests on Repository {
       }
       createdAt
       updatedAt
+      mergedAt
+      closedAt
+      additions
+      deletions
+      changedFiles
       comments {
         totalCount
       }
@@ -84,6 +89,7 @@ fragment RepoPullRequests on Repository {
         }
       }
       commits(last: 1) {
+        totalCount
         nodes {
           commit {
             statusCheckRollup {
@@ -145,6 +151,11 @@ export function buildSearchPRQuery(searchQuery: string, prLimit: number = 50): s
         }
         createdAt
         updatedAt
+        mergedAt
+        closedAt
+        additions
+        deletions
+        changedFiles
         comments {
           totalCount
         }
@@ -178,6 +189,7 @@ export function buildSearchPRQuery(searchQuery: string, prLimit: number = 50): s
           }
         }
         commits(last: 1) {
+          totalCount
           nodes {
             commit {
               statusCheckRollup {
@@ -211,6 +223,8 @@ export function buildSearchPRQuery(searchQuery: string, prLimit: number = 50): s
 export interface ParseGraphQLBatchOptions {
   currentUser?: string;
   filterUserOnly?: boolean;
+  team?: string;
+  isTeamQuery?: boolean;
 }
 
 export function parsePrNode(
@@ -308,7 +322,7 @@ export function parsePrNode(
 
   // CI Checks
   const ciChecks: CiCheckRun[] = [];
-  const commitsObj = rawPr.commits as { nodes?: Array<{ commit?: Record<string, unknown> }> } | undefined;
+  const commitsObj = rawPr.commits as { totalCount?: number; nodes?: Array<{ commit?: Record<string, unknown> }> } | undefined;
   const latestCommit = commitsObj?.nodes?.[0]?.commit;
   const rollup = latestCommit?.statusCheckRollup as { contexts?: { nodes?: unknown[] } } | undefined;
   const contextNodes = Array.isArray(rollup?.contexts?.nodes) ? rollup.contexts.nodes : [];
@@ -387,6 +401,41 @@ export function parsePrNode(
   const approvedCount = approvedReviewers.length;
   const pendingReviewersCount = requestedReviewersList.length;
 
+  const additions = typeof rawPr.additions === 'number' ? rawPr.additions : 0;
+  const deletions = typeof rawPr.deletions === 'number' ? rawPr.deletions : 0;
+  const changedFiles = typeof rawPr.changedFiles === 'number' ? rawPr.changedFiles : 0;
+  const commitsCount = typeof commitsObj?.totalCount === 'number' ? commitsObj.totalCount : 1;
+  const mergedAt = typeof rawPr.mergedAt === 'string' ? rawPr.mergedAt : undefined;
+  const closedAt = typeof rawPr.closedAt === 'string' ? rawPr.closedAt : undefined;
+
+  let firstReviewAt: string | undefined;
+  for (const rev of reviewsList) {
+    if (rev.submittedAt) {
+      if (!firstReviewAt || new Date(rev.submittedAt).getTime() < new Date(firstReviewAt).getTime()) {
+        firstReviewAt = rev.submittedAt;
+      }
+    }
+  }
+
+  // Determine scope ('mine' | 'team' | 'both')
+  const userLogin = options?.currentUser && options.currentUser !== 'unknown' ? options.currentUser.toLowerCase() : null;
+  const isMine = userLogin
+    ? (author.toLowerCase() === userLogin ||
+       requestedReviewersList.includes(userLogin) ||
+       reviewAuthorsList.includes(userLogin) ||
+       assigneesList.includes(userLogin))
+    : true;
+
+  const isTeam = Boolean(options?.isTeamQuery || options?.team);
+  let scope: 'mine' | 'team' | 'both' = 'mine';
+  if (isMine && isTeam) {
+    scope = 'both';
+  } else if (isTeam) {
+    scope = 'team';
+  } else {
+    scope = 'mine';
+  }
+
   return {
     key: {
       owner,
@@ -408,6 +457,14 @@ export function parsePrNode(
     agent: repoFallback.agent,
     commentsCount,
     unresolvedThreadsCount,
+    additions,
+    deletions,
+    changedFiles,
+    commitsCount,
+    firstReviewAt,
+    mergedAt,
+    closedAt,
+    scope,
     approvedCount,
     requiredApprovalsCount,
     pendingReviewersCount,

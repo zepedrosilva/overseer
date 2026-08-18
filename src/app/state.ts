@@ -15,6 +15,8 @@ import type {
   AppExtensions,
   AgentDefinition,
   AppConfig,
+  HistoricalPrRecord,
+  HistoricalStatsStore,
 } from './types.js';
 import { prKeyToString } from './types.js';
 
@@ -41,6 +43,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   filterUserOnly: true,
   searchQuery: '',
   dryRun: false,
+  team: '',
 };
 
 export const DEFAULT_EXTENSIONS: AppExtensions = {
@@ -73,18 +76,22 @@ export function createEmptyState(
     repos: [],
     prs: new Map<string, PrState>(),
     workers: new Map<string, WorkerHandle>(),
+    viewScope: 'mine',
+    historicalStats: { records: [] },
     dryRun: settings.dryRun,
     lastPolled: undefined,
   };
 }
 
-export function saveState(data: AppState, customPath?: string): void {
-  const filePath = customPath || resolveStatePath();
+export function saveState(data: AppState, customPath?: string, cwd: string = process.cwd()): void {
+  const filePath = customPath || resolveStatePath(cwd);
   const dir = path.dirname(filePath);
 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+
+  pruneHistoricalStats(data, 90);
 
   const serializable = {
     settings: data.settings,
@@ -94,6 +101,10 @@ export function saveState(data: AppState, customPath?: string): void {
     repos: data.repos,
     prs: Object.fromEntries(data.prs.entries()),
     workers: Object.fromEntries(data.workers.entries()),
+    viewScope: data.viewScope || 'mine',
+    teamMembers: data.teamMembers || [],
+    teamProfiles: data.teamProfiles || {},
+    historicalStats: data.historicalStats || { records: [] },
     dryRun: data.dryRun || data.settings?.dryRun || false,
     lastPolled: data.lastPolled,
     currentUser: data.currentUser,
@@ -157,6 +168,18 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       }
     }
 
+    const viewScope = parsed.viewScope === 'team' ? 'team' : 'mine';
+    const teamMembers = Array.isArray(parsed.teamMembers) ? parsed.teamMembers.filter((m) => typeof m === 'string') : undefined;
+    const teamProfiles = parsed.teamProfiles && typeof parsed.teamProfiles === 'object'
+      ? (parsed.teamProfiles as Record<string, { login: string; name?: string }>)
+      : undefined;
+    let historicalStats: HistoricalStatsStore = { records: [] };
+    if (parsed.historicalStats && typeof parsed.historicalStats === 'object' && Array.isArray((parsed.historicalStats as any).records)) {
+      historicalStats = {
+        records: (parsed.historicalStats as any).records.filter((r: any) => r && r.key && r.createdAt),
+      };
+    }
+
     return {
       settings,
       extensions,
@@ -165,6 +188,10 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       repos: Array.isArray(parsed.repos) ? parsed.repos : [],
       prs,
       workers,
+      viewScope,
+      teamMembers,
+      teamProfiles,
+      historicalStats,
       dryRun: settings.dryRun,
       lastPolled: typeof parsed.lastPolled === 'number' ? parsed.lastPolled : undefined,
       currentUser: typeof parsed.currentUser === 'string' ? parsed.currentUser : undefined,
@@ -172,6 +199,57 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
   } catch {
     return null;
   }
+}
+
+// ── Historical Stats Recording ──────────────────────────────────────────────
+
+export function recordHistoricalPr(data: AppState, pr: PrState): void {
+  if (!data.historicalStats) {
+    data.historicalStats = { records: [] };
+  }
+
+  const keyStr = prKeyToString(pr.key);
+  const existingIdx = data.historicalStats.records.findIndex(
+    (r) => prKeyToString(r.key) === keyStr
+  );
+
+  const record: HistoricalPrRecord = {
+    key: pr.key,
+    author: pr.author,
+    title: pr.title,
+    createdAt: pr.createdAt,
+    firstReviewAt: pr.firstReviewAt,
+    mergedAt: pr.mergedAt,
+    closedAt: pr.closedAt,
+    state: pr.state,
+    additions: pr.additions || 0,
+    deletions: pr.deletions || 0,
+    changedFiles: pr.changedFiles || 0,
+    commitsCount: pr.commitsCount || 1,
+    commentsCount: pr.commentsCount || 0,
+    unresolvedThreadsCount: pr.unresolvedThreadsCount || 0,
+    ciStatus: pr.ciStatus,
+    scope: pr.scope || 'mine',
+  };
+
+  if (existingIdx >= 0) {
+    data.historicalStats.records[existingIdx] = record;
+  } else {
+    data.historicalStats.records.push(record);
+  }
+
+  pruneHistoricalStats(data, 90);
+}
+
+export function pruneHistoricalStats(data: AppState, maxDays: number = 90): number {
+  if (!data.historicalStats?.records) return 0;
+  const cutoffMs = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+  const originalCount = data.historicalStats.records.length;
+  data.historicalStats.records = data.historicalStats.records.filter((r) => {
+    const time = new Date(r.createdAt).getTime();
+    return !isNaN(time) && time >= cutoffMs;
+  });
+  return originalCount - data.historicalStats.records.length;
 }
 
 // ── Agent & Repository Resolution Helpers ────────────────────────────────────
@@ -240,6 +318,7 @@ export function appStateToAppConfig(data: AppState): AppConfig {
       worktrees_dir: data.settings.worktreesDir,
       batch_size: 25,
       user: data.settings.user,
+      team: data.settings.team,
       filter_user_only: data.settings.filterUserOnly,
       search_query: data.settings.searchQuery,
     },
