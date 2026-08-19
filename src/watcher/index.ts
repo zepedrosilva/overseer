@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { AppState, AppConfig, RepoHandle, PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
-import { runGraphQL, fetchTeamMembers, fetchTeamMemberProfiles } from './gh.js';
+import { runGraphQL, fetchTeamMembers, fetchTeamMemberProfiles, checkRateLimit } from './gh.js';
 import {
   buildBatchPRQuery,
   parseGraphQLBatchResponse,
@@ -39,18 +39,26 @@ function logWatcherMessage(message: string): void {
   }
 }
 
+interface FetchSearchResult {
+  prs: PrState[];
+  error?: Error;
+  isRateLimit?: boolean;
+}
+
 async function fetchSearchPrs(
   searchQuery: string,
   options?: ParseGraphQLBatchOptions,
   defaultAgent?: string
-): Promise<PrState[]> {
+): Promise<FetchSearchResult> {
   try {
     const query = buildSearchPRQuery(searchQuery, 50);
     const rawResponse = await runGraphQL<Record<string, unknown>>(query);
-    return parseGraphQLSearchResponse(rawResponse, options, defaultAgent);
+    const prs = parseGraphQLSearchResponse(rawResponse, options, defaultAgent);
+    return { prs };
   } catch (err) {
+    const isRateLimit = Boolean((err as Record<string, unknown>).isRateLimit || /rate limit|RATE_LIMITED/i.test((err as Error).message));
     logWatcherMessage(`Search query [${searchQuery}] failed: ${(err as Error).message}`);
-    return [];
+    return { prs: [], error: err as Error, isRateLimit };
   }
 }
 
@@ -92,6 +100,15 @@ export async function pollAllRepos(
   config: AppConfig,
   scope: 'all' | 'mine' | 'team' = 'all'
 ): Promise<void> {
+  // 1. Check if we are currently rate-limited by GitHub API
+  if (data.rateLimitedUntil) {
+    if (Date.now() < data.rateLimitedUntil) {
+      data.isPolling = false;
+      return;
+    }
+    data.rateLimitedUntil = undefined;
+  }
+
   data.isPolling = true;
 
   const filterOptions: ParseGraphQLBatchOptions = {
@@ -101,6 +118,8 @@ export async function pollAllRepos(
 
   const seenPrKeys = new Set<string>();
   const isSearchMode = Boolean(config.defaults.search_query) || config.repos.length === 0;
+  let hasFetchErrors = false;
+  let isRateLimited = false;
 
   try {
     if (isSearchMode) {
@@ -127,8 +146,12 @@ export async function pollAllRepos(
           personalQueries.map((q) => fetchSearchPrs(q, filterOptions, config.defaults.agent))
         );
 
-        for (const batch of personalFetchResults) {
-          for (const pr of batch) {
+        for (const res of personalFetchResults) {
+          if (res.error) {
+            hasFetchErrors = true;
+            if (res.isRateLimit) isRateLimited = true;
+          }
+          for (const pr of res.prs) {
             const keyStr = prKeyToString(pr.key);
             stagedPrs.set(keyStr, pr);
 
@@ -176,14 +199,18 @@ export async function pollAllRepos(
         const activeCutoffDate = teamActiveDays > 0
           ? new Date(Date.now() - teamActiveDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
           : '';
+        const isInitialPoll = data.lastPolled === undefined;
+        const shouldQueryClosed = scope === 'all' || isInitialPoll;
 
-        // Query PRs strictly authored by each team member (active open + recently completed)
+        // Query PRs strictly authored by each team member (active open + recently completed when full poll)
         for (const member of allTeamMembers) {
           const openQuery = activeCutoffDate
             ? `is:pr is:open author:${member} updated:>=${activeCutoffDate}`
             : `is:pr is:open author:${member}`;
           teamQueries.push(openQuery);
-          teamQueries.push(`is:pr is:closed closed:>=${cutoffDate} author:${member}`);
+          if (shouldQueryClosed) {
+            teamQueries.push(`is:pr is:closed closed:>=${cutoffDate} author:${member}`);
+          }
         }
 
         // Fetch team member author queries concurrently in parallel
@@ -195,8 +222,12 @@ export async function pollAllRepos(
         const teamPrs: PrState[] = [];
         const seenTeamKeys = new Set<string>();
 
-        for (const batch of fetchResults) {
-          for (const pr of batch) {
+        for (const res of fetchResults) {
+          if (res.error) {
+            hasFetchErrors = true;
+            if (res.isRateLimit) isRateLimited = true;
+          }
+          for (const pr of res.prs) {
             const keyStr = prKeyToString(pr.key);
             if (!seenTeamKeys.has(keyStr)) {
               seenTeamKeys.add(keyStr);
@@ -226,6 +257,16 @@ export async function pollAllRepos(
               agent: config.defaults.agent,
             });
           }
+        }
+      }
+
+      // If rate limited, record until timestamp
+      if (isRateLimited) {
+        try {
+          const rateInfo = await checkRateLimit();
+          data.rateLimitedUntil = rateInfo.resetEpochMs || (Date.now() + 15 * 60 * 1000);
+        } catch {
+          data.rateLimitedUntil = Date.now() + 15 * 60 * 1000;
         }
       }
 
@@ -279,25 +320,28 @@ export async function pollAllRepos(
       }
 
       // Detect PRs that are no longer in active scope and prune from table
-      for (const [keyStr, pr] of data.prs.entries()) {
-        if (!seenPrKeys.has(keyStr)) {
-          if (scope === 'mine') {
-            if (pr.scope === 'mine') {
+      // CRITICAL: Only prune if fetches for this scope completed without any errors!
+      if (!hasFetchErrors && seenPrKeys.size > 0) {
+        for (const [keyStr, pr] of data.prs.entries()) {
+          if (!seenPrKeys.has(keyStr)) {
+            if (scope === 'mine') {
+              if (pr.scope === 'mine') {
+                recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+                data.prs.delete(keyStr);
+              } else if (pr.scope === 'both') {
+                pr.scope = 'team';
+              }
+            } else if (scope === 'team') {
+              if (pr.scope === 'team') {
+                recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+                data.prs.delete(keyStr);
+              } else if (pr.scope === 'both') {
+                pr.scope = 'mine';
+              }
+            } else {
               recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
               data.prs.delete(keyStr);
-            } else if (pr.scope === 'both') {
-              pr.scope = 'team';
             }
-          } else if (scope === 'team') {
-            if (pr.scope === 'team') {
-              recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
-              data.prs.delete(keyStr);
-            } else if (pr.scope === 'both') {
-              pr.scope = 'mine';
-            }
-          } else {
-            recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
-            data.prs.delete(keyStr);
           }
         }
       }

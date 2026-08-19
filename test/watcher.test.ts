@@ -232,5 +232,94 @@ describe('Watcher Coordinator', () => {
 
       spy.mockRestore();
     });
+
+    it('skips polling when rateLimitedUntil is in the future', async () => {
+      const { pollAllRepos } = await import('../src/watcher/index.js');
+      const { createEmptyState } = await import('../src/app/state.js');
+      const gh = await import('../src/watcher/gh.js');
+      const vi = await import('vitest');
+
+      const data = createEmptyState();
+      data.rateLimitedUntil = Date.now() + 60000;
+
+      const spy = vi.vi.spyOn(gh, 'runGraphQL');
+
+      const config = {
+        defaults: {
+          agent: 'claude',
+          pollIntervalSecs: 30,
+          worktrees_dir: './.overseer/worktrees',
+          batch_size: 8,
+          filter_user_only: false,
+          team: '',
+        },
+        repos: [],
+        agents: {},
+        runtime: { dryRun: false },
+        streamdeck: { enabled: false, port: 3210 },
+      };
+
+      await pollAllRepos(data, config);
+      expect(spy).not.toHaveBeenCalled();
+      expect(data.isPolling).toBe(false);
+
+      spy.mockRestore();
+    });
+
+    it('preserves existing PRs and does not prune when search queries encounter errors', async () => {
+      const { pollAllRepos } = await import('../src/watcher/index.js');
+      const { createEmptyState, upsertPR } = await import('../src/app/state.js');
+      const gh = await import('../src/watcher/gh.js');
+      const vi = await import('vitest');
+
+      const data = createEmptyState();
+      const existingPr = {
+        key: { owner: 'acme-corp', repo: 'web-frontend', number: 10 },
+        title: 'Existing active PR',
+        branch: 'feat/test',
+        baseBranch: 'main',
+        author: 'alice',
+        url: 'https://github.com/acme-corp/web-frontend/pull/10',
+        isDraft: false,
+        state: 'OPEN' as const,
+        reviewVerdict: 'APPROVED' as const,
+        ciStatus: 'SUCCESS' as const,
+        overallStatus: 'Ready' as const,
+        ciChecks: [],
+        commentsCount: 0,
+        unresolvedThreadsCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        log: [],
+        scope: 'mine' as const,
+      };
+      upsertPR(data, existingPr);
+
+      // Simulate a rate limit error or network failure
+      const spy = vi.vi.spyOn(gh, 'runGraphQL').mockRejectedValue(new Error('API rate limit already exceeded'));
+
+      const config = {
+        defaults: {
+          agent: 'claude',
+          pollIntervalSecs: 30,
+          worktrees_dir: './.overseer/worktrees',
+          batch_size: 8,
+          filter_user_only: false,
+          team: '',
+        },
+        repos: [],
+        agents: {},
+        runtime: { dryRun: false },
+        streamdeck: { enabled: false, port: 3210 },
+      };
+
+      await pollAllRepos(data, config);
+
+      // Existing PR must NOT be wiped or pruned
+      expect(data.prs.size).toBe(1);
+      expect(data.prs.get('acme-corp/web-frontend#10')?.title).toBe('Existing active PR');
+
+      spy.mockRestore();
+    });
   });
 });

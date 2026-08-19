@@ -319,6 +319,7 @@ export interface AppState {
   lastPolled?: number;
   isPolling?: boolean;
   currentUser?: string;
+  rateLimitedUntil?: number;
 }
 
 // ── Legacy/Adapter Config Type for Seamless Integration ─────────────────────
