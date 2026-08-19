@@ -199,7 +199,17 @@ export function renderTable(options: RenderTableOptions): string[] {
     const authorName = isTeam ? truncateVisual(rawAuthor, authorColWidth).padEnd(authorColWidth) : '';
     const branch = truncateVisual(pr.branch, branchColWidth).padEnd(branchColWidth);
     const title = truncateVisual(pr.title, titleWidth).padEnd(titleWidth);
-    const age = formatTimeAgo(pr.updatedAt).padStart(5);
+
+    const isCompleted =
+      pr.overallStatus === 'Merged' ||
+      pr.overallStatus === 'Closed' ||
+      pr.state === 'MERGED' ||
+      pr.state === 'CLOSED';
+
+    const branchColor = isCompleted ? colors.fgMuted : colors.fgDim;
+    const titleColor = isCompleted ? colors.fgDim : colors.fg;
+    const completedTime = pr.mergedAt || pr.closedAt || pr.updatedAt;
+    const age = formatTimeAgo(completedTime).padStart(5);
 
     const bgPrefix = isSelected ? `\x1B[48;2;30;41;59m` : '';
     const bgReset = isSelected ? `\x1B[0m` : '';
@@ -207,8 +217,8 @@ export function renderTable(options: RenderTableOptions): string[] {
     const repoPart = `\x1B[${rgbColor(colors.fg)}${repoName}\x1B[0m`;
     const numPart = `\x1B[${rgbColor(colors.fg)}${prNum}\x1B[0m`;
     const authorPart = isTeam ? `\x1B[${rgbColor(colors.cyan)}${authorName}\x1B[0m ` : '';
-    const branchPart = `\x1B[${rgbColor(colors.fgDim)}${branch}\x1B[0m`;
-    const titlePart = `\x1B[${rgbColor(colors.fg)}${title}\x1B[0m`;
+    const branchPart = `\x1B[${rgbColor(branchColor)}${branch}\x1B[0m`;
+    const titlePart = `\x1B[${rgbColor(titleColor)}${title}\x1B[0m`;
     const statusPart = `\x1B[${sc}${sIcon} ${sName}\x1B[0m`;
     const ciPart = `\x1B[${cc}${cIcon} \x1B[0m`;
     const revPart = `\x1B[${rgbColor(revColorHex)}${revText}\x1B[0m`;

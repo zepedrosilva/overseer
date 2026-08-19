@@ -9,7 +9,7 @@ import { renderBanner, renderStatsBar, renderDivider } from './banner.js';
 import { renderSearchBar, renderScopeTabBar, filterPRs } from './search.js';
 import { renderTable } from './table.js';
 import { renderDetails, renderDetailsModal } from './details.js';
-import { renderSettingsModal, SETTINGS_ITEMS, POLL_INTERVALS } from './settings.js';
+import { renderSettingsModal, SETTINGS_ITEMS, POLL_INTERVALS, RECENT_WINDOW_OPTIONS, TEAM_ACTIVE_WINDOW_OPTIONS, TEAM_POLL_INTERVALS } from './settings.js';
 import { renderDiffModal, parseAndColorizeDiff } from './diff.js';
 import { renderLogsModal, loadPRLogFile } from './logs.js';
 import { renderStatsModal } from './stats.js';
@@ -62,6 +62,7 @@ export function createTUI(
   let isLogsModalOpen = false;
   let logsScrollOffset = 0;
   let isStatsModalOpen = false;
+  let statsTimeframe: StatsTimeframe = '30d';
   let statsSortBy: LeaderboardSort = 'merged30';
   let isHelpModalOpen = false;
   let isBackfillModalOpen = false;
@@ -99,23 +100,48 @@ export function createTUI(
     const list = Array.from(data.prs.values());
     const currentScope = data.viewScope || 'mine';
     const user = data.currentUser?.toLowerCase();
+    const recentWindowDays = data.settings?.recentPrWindowDays ?? 7;
+    const recentCutoffMs = Date.now() - recentWindowDays * 24 * 60 * 60 * 1000;
+    const teamActiveDays = data.settings?.teamActiveWindowDays ?? 30;
+    const teamActiveCutoffMs = teamActiveDays > 0 ? Date.now() - teamActiveDays * 24 * 60 * 60 * 1000 : 0;
+    const memberSet = new Set((data.teamMembers || []).map((m) => m.toLowerCase()));
 
-    // 1. Filter by active Scope and strictly active (open) PRs
+    // 1. Filter by active Scope, retention window for completed PRs, and active window for team open PRs
     const scopedList = list.filter((pr) => {
-      if (
+      const isCompleted =
         pr.state === 'CLOSED' ||
         pr.state === 'MERGED' ||
         pr.overallStatus === 'Closed' ||
-        pr.overallStatus === 'Merged'
-      ) {
-        return false;
+        pr.overallStatus === 'Merged';
+
+      if (isCompleted) {
+        const completedTime = pr.closedAt || pr.mergedAt || pr.updatedAt;
+        const timeMs = completedTime ? new Date(completedTime).getTime() : 0;
+        if (!timeMs || timeMs < recentCutoffMs) {
+          return false;
+        }
       }
+
       if (currentScope === 'mine') {
         if (user && pr.author.toLowerCase() === user) return true;
         return pr.scope === 'mine' || pr.scope === 'both' || !pr.scope;
       } else {
-        // team scope
-        return pr.scope === 'team' || pr.scope === 'both';
+        // team scope: strictly PRs authored by team members
+        const isTeamAuthor = memberSet.size > 0
+          ? memberSet.has(pr.author.toLowerCase())
+          : (pr.scope === 'team' || pr.scope === 'both');
+
+        if (!isTeamAuthor) return false;
+
+        // Inactive open PR filter for team scope
+        if (!isCompleted && teamActiveCutoffMs > 0) {
+          const updatedMs = new Date(pr.updatedAt).getTime();
+          if (!updatedMs || updatedMs < teamActiveCutoffMs) {
+            return false;
+          }
+        }
+
+        return true;
       }
     });
 
@@ -123,7 +149,9 @@ export function createTUI(
 
     // Group & Sort:
     // 1. Group by organization (owner) sorted strictly alphabetically by name
-    // 2. Within each org: attention first (ChangesRequested, CiFailing), then Ready, then others, then updatedAt desc
+    // 2. Within each org:
+    //    Priority: Attention first (ChangesRequested, CiFailing), then Ready, then Reviewing/CiPending, then Draft, then Merged, then Closed.
+    //    Secondary: updatedAt / completion time desc
     filtered.sort((a, b) => {
       const ownerA = (a.key.owner || '').toLowerCase();
       const ownerB = (b.key.owner || '').toLowerCase();
@@ -136,7 +164,9 @@ export function createTUI(
         if (pr.overallStatus === 'Ready') return 1;
         if (pr.overallStatus === 'Reviewing' || pr.overallStatus === 'CiPending') return 2;
         if (pr.overallStatus === 'Draft') return 3;
-        return 4;
+        if (pr.overallStatus === 'Merged' || pr.state === 'MERGED') return 4;
+        if (pr.overallStatus === 'Closed' || pr.state === 'CLOSED') return 5;
+        return 6;
       };
       const pDiff = priority(a) - priority(b);
       if (pDiff !== 0) return pDiff;
@@ -246,10 +276,35 @@ export function createTUI(
       // 3. Scope Tab Bar & Search Bar
       const allPrsList = Array.from(data.prs.values());
       const userLower = data.currentUser?.toLowerCase();
+      const memberSetForTabs = new Set((data.teamMembers || []).map((m) => m.toLowerCase()));
+      const recentWinDaysForTabs = data.settings?.recentPrWindowDays ?? 7;
+      const recentCutoffForTabs = Date.now() - recentWinDaysForTabs * 24 * 60 * 60 * 1000;
+      const teamActiveDaysForTabs = data.settings?.teamActiveWindowDays ?? 30;
+      const teamActiveCutoffForTabs = teamActiveDaysForTabs > 0 ? Date.now() - teamActiveDaysForTabs * 24 * 60 * 60 * 1000 : 0;
+
       const mineCount = allPrsList.filter(
         (p) => p.scope === 'mine' || p.scope === 'both' || (userLower && p.author.toLowerCase() === userLower) || !p.scope
       ).length;
-      const teamCount = allPrsList.filter((p) => p.scope === 'team' || p.scope === 'both').length;
+
+      const teamCount = allPrsList.filter((p) => {
+        const isCompleted =
+          p.state === 'CLOSED' ||
+          p.state === 'MERGED' ||
+          p.overallStatus === 'Closed' ||
+          p.overallStatus === 'Merged';
+
+        if (isCompleted) {
+          const completedTime = p.closedAt || p.mergedAt || p.updatedAt;
+          const timeMs = completedTime ? new Date(completedTime).getTime() : 0;
+          if (!timeMs || timeMs < recentCutoffForTabs) return false;
+        } else if (teamActiveCutoffForTabs > 0) {
+          const updatedMs = new Date(p.updatedAt).getTime();
+          if (!updatedMs || updatedMs < teamActiveCutoffForTabs) return false;
+        }
+
+        if (memberSetForTabs.size > 0) return memberSetForTabs.has(p.author.toLowerCase());
+        return p.scope === 'team' || p.scope === 'both';
+      }).length;
 
       allLines.push(renderDivider(layout.width));
       allLines.push(
@@ -426,9 +481,10 @@ export function createTUI(
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
         const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
-        const stats = calculateStats(data, '30d', data.viewScope || 'mine', statsSortBy);
+        const stats = calculateStats(data, statsTimeframe, data.viewScope || 'mine', statsSortBy);
         const modalLines = renderStatsModal({
           stats,
+          timeframe: statsTimeframe,
           scope: data.viewScope || 'mine',
           sortBy: statsSortBy,
           teamName: data.settings.team,
@@ -601,7 +657,12 @@ export function createTUI(
             if (item.id === 'searchQuery') {
               data.settings.searchQuery = settingInputBuffer.trim();
             } else if (item.id === 'team') {
-              data.settings.team = settingInputBuffer.trim() || undefined;
+              const newTeam = settingInputBuffer.trim() || undefined;
+              if (data.settings.team !== newTeam) {
+                data.settings.team = newTeam;
+                data.teamMembers = undefined;
+                data.teamProfiles = undefined;
+              }
             } else if (item.id === 'streamdeckPort') {
               const portNum = parseInt(settingInputBuffer.trim(), 10);
               if (!isNaN(portNum) && portNum > 0 && portNum < 65536) {
@@ -677,6 +738,25 @@ export function createTUI(
               ? (curIdx + 1) % POLL_INTERVALS.length
               : (curIdx - 1 + POLL_INTERVALS.length) % POLL_INTERVALS.length;
             data.settings.pollIntervalSecs = POLL_INTERVALS[nextIdx >= 0 ? nextIdx : 1];
+          } else if (item.id === 'recentPrWindowDays') {
+            const curIdx = RECENT_WINDOW_OPTIONS.indexOf(data.settings.recentPrWindowDays || 7);
+            const nextIdx = isForward
+              ? (curIdx + 1) % RECENT_WINDOW_OPTIONS.length
+              : (curIdx - 1 + RECENT_WINDOW_OPTIONS.length) % RECENT_WINDOW_OPTIONS.length;
+            data.settings.recentPrWindowDays = RECENT_WINDOW_OPTIONS[nextIdx >= 0 ? nextIdx : 2];
+          } else if (item.id === 'teamActiveWindowDays') {
+            const cur = data.settings.teamActiveWindowDays ?? 30;
+            const curIdx = TEAM_ACTIVE_WINDOW_OPTIONS.indexOf(cur);
+            const nextIdx = isForward
+              ? (curIdx + 1) % TEAM_ACTIVE_WINDOW_OPTIONS.length
+              : (curIdx - 1 + TEAM_ACTIVE_WINDOW_OPTIONS.length) % TEAM_ACTIVE_WINDOW_OPTIONS.length;
+            data.settings.teamActiveWindowDays = TEAM_ACTIVE_WINDOW_OPTIONS[nextIdx >= 0 ? nextIdx : 1];
+          } else if (item.id === 'teamPollInterval') {
+            const curIdx = TEAM_POLL_INTERVALS.indexOf(data.settings.teamPollIntervalSecs || 120);
+            const nextIdx = isForward
+              ? (curIdx + 1) % TEAM_POLL_INTERVALS.length
+              : (curIdx - 1 + TEAM_POLL_INTERVALS.length) % TEAM_POLL_INTERVALS.length;
+            data.settings.teamPollIntervalSecs = TEAM_POLL_INTERVALS[nextIdx >= 0 ? nextIdx : 2];
           } else if (item.id === 'filterUserOnly') {
             data.settings.filterUserOnly = !data.settings.filterUserOnly;
           } else if (item.id === 'dryRun') {
@@ -775,13 +855,51 @@ export function createTUI(
           return;
         }
 
+        if (key === '1') {
+          statsTimeframe = '7d';
+          render();
+          return;
+        }
+
+        if (key === '2') {
+          statsTimeframe = '14d';
+          render();
+          return;
+        }
+
+        if (key === '3') {
+          statsTimeframe = '30d';
+          render();
+          return;
+        }
+
+        if (key === '4') {
+          statsTimeframe = '60d';
+          render();
+          return;
+        }
+
+        if (key === '5') {
+          statsTimeframe = '90d';
+          render();
+          return;
+        }
+
+        if (key === 'w' || key === 'W') { // w cycles timeframe
+          const tfList: StatsTimeframe[] = ['7d', '14d', '30d', '60d', '90d'];
+          const idx = tfList.indexOf(statsTimeframe);
+          statsTimeframe = tfList[(idx + 1) % tfList.length];
+          render();
+          return;
+        }
+
         if (key === 'b' || key === 'B') {
           triggerBackfill();
           return;
         }
 
         if (key === 's' || key === 'S') { // s cycles leaderboard sort
-          const sortCriteria: LeaderboardSort[] = ['merged30', 'merged60', 'merged90', 'total', 'comments', 'stale'];
+          const sortCriteria: LeaderboardSort[] = ['merged7', 'merged14', 'merged30', 'merged60', 'merged90', 'total', 'comments', 'stale'];
           const idx = sortCriteria.indexOf(statsSortBy);
           statsSortBy = sortCriteria[(idx + 1) % sortCriteria.length];
           render();

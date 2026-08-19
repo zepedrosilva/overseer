@@ -44,6 +44,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchQuery: '',
   dryRun: false,
   team: '',
+  recentPrWindowDays: 7,
+  teamActiveWindowDays: 30,
+  teamPollIntervalSecs: 120,
 };
 
 export const DEFAULT_EXTENSIONS: AppExtensions = {
@@ -321,6 +324,9 @@ export function appStateToAppConfig(data: AppState): AppConfig {
       team: data.settings.team,
       filter_user_only: data.settings.filterUserOnly,
       search_query: data.settings.searchQuery,
+      recent_pr_window_days: data.settings.recentPrWindowDays,
+      team_active_window_days: data.settings.teamActiveWindowDays,
+      team_poll_interval_secs: data.settings.teamPollIntervalSecs,
     },
     repos: [],
     agents: { ...data.customAgents },

@@ -63,7 +63,7 @@ describe('Watcher Coordinator', () => {
         },
       };
 
-      const spy = vi.vi.spyOn(gh, 'runGraphQL').mockResolvedValueOnce(mockSearchData);
+      const spy = vi.vi.spyOn(gh, 'runGraphQL').mockResolvedValue(mockSearchData);
 
       const data = {
         repos: [],
@@ -160,6 +160,75 @@ describe('Watcher Coordinator', () => {
 
       // Discovered repos dynamically updated
       expect(data.repos.some((r) => r.owner === 'zepedrosilva' && r.repo === 'overseer')).toBe(true);
+
+      spy.mockRestore();
+    });
+
+    it('queries both open and recently completed PRs for team members and personal scope', async () => {
+      const { pollAllRepos } = await import('../src/watcher/index.js');
+      const { createEmptyState } = await import('../src/app/state.js');
+      const gh = await import('../src/watcher/gh.js');
+      const vi = await import('vitest');
+
+      const data = createEmptyState({
+        team: 'acme-corp/frontend-team',
+        recentPrWindowDays: 7,
+      });
+      data.currentUser = 'alice';
+      data.teamMembers = ['alice', 'bob'];
+
+      const queriesExecuted: string[] = [];
+      const spy = vi.vi.spyOn(gh, 'runGraphQL').mockImplementation(async (query: string) => {
+        queriesExecuted.push(query);
+        return {
+          data: {
+            search: {
+              issueCount: 0,
+              nodes: [],
+            },
+          },
+        };
+      });
+
+      const config = {
+        defaults: {
+          agent: 'claude',
+          pollIntervalSecs: 30,
+          worktrees_dir: './.overseer/worktrees',
+          batch_size: 8,
+          filter_user_only: false,
+          team: 'acme-corp/frontend-team',
+          recent_pr_window_days: 7,
+        },
+        repos: [],
+        agents: {},
+        runtime: { dryRun: false },
+        streamdeck: { enabled: false, port: 3210 },
+      };
+
+      await pollAllRepos(data, config);
+
+      // Verify that queries contain both is:open and is:closed closed:>=...
+      const combinedQueries = queriesExecuted.join('\n');
+      expect(combinedQueries).toContain('is:open');
+      expect(combinedQueries).toContain('updated:>=');
+      expect(combinedQueries).toContain('is:closed closed:>=');
+      expect(combinedQueries).toContain('author:bob');
+      expect(combinedQueries).not.toContain('involves:bob');
+
+      // Scoped poll: 'mine' only queries personal PRs and ignores team members
+      queriesExecuted.length = 0;
+      await pollAllRepos(data, config, 'mine');
+      const mineQueries = queriesExecuted.join('\n');
+      expect(mineQueries).toContain('involves:alice');
+      expect(mineQueries).not.toContain('author:bob');
+
+      // Scoped poll: 'team' only queries team members and ignores personal search
+      queriesExecuted.length = 0;
+      await pollAllRepos(data, config, 'team');
+      const teamQueries = queriesExecuted.join('\n');
+      expect(teamQueries).toContain('author:bob');
+      expect(teamQueries).not.toContain('involves:alice');
 
       spy.mockRestore();
     });

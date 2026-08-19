@@ -274,6 +274,41 @@ export async function fetchTeamMembers(teamSlug: string): Promise<string[]> {
         .filter(Boolean);
     }
 
+    // If slug without org (e.g. "core-team"), search authenticated user's orgs
+    try {
+      const { stdout: orgsOut } = await execFileAsync('gh', [
+        'api',
+        'user/memberships/orgs',
+        '--jq',
+        '.[].organization.login',
+      ]);
+      const orgs = orgsOut
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      for (const org of orgs) {
+        try {
+          const { stdout: teamMembersOut } = await execFileAsync('gh', [
+            'api',
+            `orgs/${org}/teams/${cleanSlug.replace(/^@/, '')}/members`,
+            '--paginate',
+            '--jq',
+            '.[].login',
+          ]);
+          const members = teamMembersOut
+            .split('\n')
+            .map((s) => s.trim().replace(/^@/, ''))
+            .filter(Boolean);
+          if (members.length > 0) return members;
+        } catch {
+          // Continue to next org
+        }
+      }
+    } catch {
+      // Non-critical fallback
+    }
+
     return [cleanSlug.replace(/^@/, '')];
   } catch {
     return [];
