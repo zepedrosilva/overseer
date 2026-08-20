@@ -6,6 +6,12 @@ import {
   createEmptyState,
   saveState,
   loadState,
+  saveSettings,
+  loadSettings,
+  resolveSettingsPath,
+  resetState,
+  resetSettings,
+  resetAll,
   findPR,
   upsertPR,
   removePR,
@@ -316,6 +322,86 @@ describe('State Store & Persistence', () => {
       expect(loaded?.historicalStats?.memberWatermarks?.alice.prCount).toBe(15);
       expect(loaded?.historicalStats?.memberWatermarks?.alice.status).toBe('success');
       expect(loaded?.historicalStats?.memberWatermarks?.bob.status).toBe('rate_limited');
+    });
+  });
+
+  describe('settings.json Separation & Migration', () => {
+    it('saves and loads user preferences from settings.json independently', () => {
+      const state = createEmptyState({
+        team: 'acme-infra',
+        pollIntervalSecs: 45,
+        defaultAgent: 'gemini',
+      }, {
+        streamdeck: { enabled: true, port: 4444 },
+      });
+      setRepoAgent(state, { owner: 'acme-corp', repo: 'backend' }, 'pi');
+
+      const customSettingsPath = path.join(tmpDir, '.overseer', 'settings.json');
+      saveSettings(state, customSettingsPath, tmpDir);
+
+      const loaded = loadSettings(customSettingsPath, tmpDir);
+      expect(loaded).not.toBeNull();
+      expect(loaded?.settings?.team).toBe('acme-infra');
+      expect(loaded?.settings?.pollIntervalSecs).toBe(45);
+      expect(loaded?.settings?.defaultAgent).toBe('gemini');
+      expect(loaded?.extensions?.streamdeck?.enabled).toBe(true);
+      expect(loaded?.extensions?.streamdeck?.port).toBe(4444);
+      expect(loaded?.repoAgents?.['acme-corp/backend']).toBe('pi');
+    });
+
+    it('migrates legacy settings from state.json when settings.json is missing', () => {
+      const overseerDir = path.join(tmpDir, '.overseer');
+      fs.mkdirSync(overseerDir, { recursive: true });
+      const legacyState = {
+        settings: {
+          team: 'legacy-team',
+          pollIntervalSecs: 60,
+          defaultAgent: 'agy',
+        },
+        extensions: {
+          streamdeck: { enabled: true, port: 5000 },
+        },
+        repoAgents: {
+          'acme-corp/frontend': 'claude',
+        },
+        prs: {},
+      };
+      fs.writeFileSync(path.join(overseerDir, 'state.json'), JSON.stringify(legacyState, null, 2));
+
+      const loaded = loadSettings(undefined, tmpDir);
+      expect(loaded).not.toBeNull();
+      expect(loaded?.settings?.team).toBe('legacy-team');
+      expect(loaded?.settings?.pollIntervalSecs).toBe(60);
+      expect(loaded?.settings?.defaultAgent).toBe('agy');
+      expect(loaded?.extensions?.streamdeck?.port).toBe(5000);
+      expect(loaded?.repoAgents?.['acme-corp/frontend']).toBe('claude');
+    });
+
+    it('resets state, settings, and all cleanly with reset helpers', () => {
+      const overseerDir = path.join(tmpDir, '.overseer');
+      fs.mkdirSync(overseerDir, { recursive: true });
+      const stateFile = path.join(overseerDir, 'state.json');
+      const settingsFile = path.join(overseerDir, 'settings.json');
+
+      fs.writeFileSync(stateFile, JSON.stringify({ prs: {} }));
+      fs.writeFileSync(settingsFile, JSON.stringify({ settings: { team: 'test' } }));
+
+      expect(fs.existsSync(stateFile)).toBe(true);
+      expect(fs.existsSync(settingsFile)).toBe(true);
+
+      resetState(tmpDir);
+      expect(fs.existsSync(stateFile)).toBe(false);
+      expect(fs.existsSync(settingsFile)).toBe(true);
+
+      fs.writeFileSync(stateFile, JSON.stringify({ prs: {} }));
+      resetSettings(tmpDir);
+      expect(fs.existsSync(settingsFile)).toBe(false);
+      expect(fs.existsSync(stateFile)).toBe(true);
+
+      fs.writeFileSync(settingsFile, JSON.stringify({ settings: { team: 'test' } }));
+      resetAll(tmpDir);
+      expect(fs.existsSync(stateFile)).toBe(false);
+      expect(fs.existsSync(settingsFile)).toBe(false);
     });
   });
 });

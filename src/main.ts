@@ -7,6 +7,11 @@ import { prKeyToString } from './app/types.js';
 import {
   loadState,
   saveState,
+  loadSettings,
+  saveSettings,
+  resetState,
+  resetSettings,
+  resetAll,
   createEmptyState,
   updatePRStatus,
   appendLog,
@@ -40,6 +45,8 @@ interface CliArgs {
   user?: string;
   team?: string;
   resetState?: boolean;
+  resetSettings?: boolean;
+  resetAll?: boolean;
 }
 
 function parseCliArgs(): CliArgs {
@@ -87,6 +94,10 @@ function parseCliArgs(): CliArgs {
       result.user = arg.split('=')[1];
     } else if (arg === '--reset-state') {
       result.resetState = true;
+    } else if (arg === '--reset-settings') {
+      result.resetSettings = true;
+    } else if (arg === '--reset-all') {
+      result.resetAll = true;
     }
   }
 
@@ -96,8 +107,16 @@ function parseCliArgs(): CliArgs {
 async function main(): Promise<void> {
   const cli = parseCliArgs();
 
-  // 1. Load persisted state or initialize empty domain state
-  const data: AppState = cli.resetState ? createEmptyState() : (loadState() || createEmptyState());
+  // 1. Handle reset flags
+  if (cli.resetAll) {
+    resetAll();
+  } else {
+    if (cli.resetState) resetState();
+    if (cli.resetSettings) resetSettings();
+  }
+
+  // 2. Load persisted state or initialize empty domain state
+  const data: AppState = loadState() || createEmptyState();
 
   // 2. Apply CLI flags on top of loaded settings & extensions
   if (cli.streamdeck !== undefined) data.extensions.streamdeck.enabled = cli.streamdeck;

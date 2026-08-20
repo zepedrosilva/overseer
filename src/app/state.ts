@@ -15,6 +15,7 @@ import type {
   AppExtensions,
   AgentDefinition,
   AgentsConfigFile,
+  SettingsConfigFile,
   AppConfig,
   HistoricalPrRecord,
   HistoricalStatsStore,
@@ -24,6 +25,7 @@ import { prKeyToString } from './types.js';
 
 export const LOCAL_OVERSEER_DIR = '.overseer';
 export const STATE_FILE_NAME = 'state.json';
+export const SETTINGS_FILE_NAME = 'settings.json';
 export const AGENTS_FILE_NAME = 'agents.json';
 export const MAX_PR_LOG_ENTRIES = 200;
 
@@ -37,6 +39,10 @@ export function resolveStateDir(cwd: string = process.cwd()): string {
 
 export function resolveStatePath(cwd: string = process.cwd()): string {
   return path.join(resolveStateDir(cwd), STATE_FILE_NAME);
+}
+
+export function resolveSettingsPath(cwd: string = process.cwd()): string {
+  return path.join(resolveStateDir(cwd), SETTINGS_FILE_NAME);
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -89,6 +95,76 @@ export function createEmptyState(
   };
 }
 
+export function saveSettings(data: AppState, customPath?: string, cwd: string = process.cwd()): void {
+  // Safety guard: Automated tests running in Vitest must never overwrite live project settings in process.cwd()
+  if (process.env.VITEST && !customPath && path.resolve(cwd) === path.resolve(process.cwd())) {
+    return;
+  }
+
+  const filePath = customPath || resolveSettingsPath(cwd);
+  const dir = path.dirname(filePath);
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const serializable: SettingsConfigFile = {
+    settings: data.settings,
+    extensions: data.extensions,
+    repoAgents: data.repoAgents,
+  };
+
+  fs.writeFileSync(filePath, JSON.stringify(serializable, null, 2), 'utf-8');
+}
+
+export function loadSettings(customPath?: string, cwd: string = process.cwd()): SettingsConfigFile | null {
+  const filePath = customPath || resolveSettingsPath(cwd);
+  if (fs.existsSync(filePath)) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(raw) as SettingsConfigFile;
+      return {
+        settings: parsed.settings || {},
+        extensions: parsed.extensions || {},
+        repoAgents: parsed.repoAgents || {},
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Backward-compatible migration from state.json if settings.json does not exist yet
+  const statePath = customPath ? path.join(path.dirname(customPath), STATE_FILE_NAME) : resolveStatePath(cwd);
+  if (fs.existsSync(statePath)) {
+    try {
+      const raw = fs.readFileSync(statePath, 'utf-8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed.settings || parsed.extensions || parsed.repoAgents) {
+        const migrated: SettingsConfigFile = {
+          settings: (parsed.settings as Partial<AppSettings>) || {},
+          extensions: (parsed.extensions as Partial<AppExtensions>) || {},
+          repoAgents: (parsed.repoAgents as Record<string, string>) || {},
+        };
+        // Auto-persist migrated settings.json unless running in tests
+        if (!process.env.VITEST || path.resolve(cwd) !== path.resolve(process.cwd())) {
+          try {
+            const dir = path.dirname(filePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(filePath, JSON.stringify(migrated, null, 2), 'utf-8');
+          } catch {
+            // Ignore migration write error
+          }
+        }
+        return migrated;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 export function saveState(data: AppState, customPath?: string, cwd: string = process.cwd()): void {
   // Safety guard: Automated tests running in Vitest must never overwrite live project state in process.cwd()
   if (process.env.VITEST && !customPath && path.resolve(cwd) === path.resolve(process.cwd())) {
@@ -103,6 +179,10 @@ export function saveState(data: AppState, customPath?: string, cwd: string = pro
   }
 
   pruneHistoricalStats(data, 90);
+
+  // Keep settings.json synchronized alongside state
+  const targetSettingsPath = path.join(dir, SETTINGS_FILE_NAME);
+  saveSettings(data, customPath ? targetSettingsPath : undefined, cwd);
 
   const serializable = {
     settings: data.settings,
@@ -127,32 +207,69 @@ export function saveState(data: AppState, customPath?: string, cwd: string = pro
 
 export function loadState(customPath?: string, cwd: string = process.cwd()): AppState | null {
   const filePath = customPath || resolveStatePath(cwd);
-  if (!fs.existsSync(filePath)) {
+  const targetDir = customPath ? path.dirname(customPath) : resolveStateDir(cwd);
+  const targetSettingsPath = path.join(targetDir, SETTINGS_FILE_NAME);
+
+  const settingsConfig = loadSettings(
+    fs.existsSync(targetSettingsPath) ? targetSettingsPath : undefined,
+    cwd
+  );
+
+  const stateExists = fs.existsSync(filePath);
+  const settingsExists = fs.existsSync(targetSettingsPath);
+
+  if (!stateExists && !settingsExists && !settingsConfig) {
     return null;
+  }
+
+  if (customPath && !stateExists) {
+    return null;
+  }
+
+  const parsedSettings = (settingsConfig?.settings || {}) as Partial<AppSettings>;
+  const settings: AppSettings = {
+    ...DEFAULT_SETTINGS,
+    ...parsedSettings,
+    dryRun: Boolean(parsedSettings.dryRun ?? DEFAULT_SETTINGS.dryRun),
+  };
+
+  const parsedExt = (settingsConfig?.extensions || {}) as Partial<AppExtensions>;
+  const extensions: AppExtensions = {
+    streamdeck: {
+      ...DEFAULT_EXTENSIONS.streamdeck,
+      ...(parsedExt.streamdeck || {}),
+    },
+  };
+
+  const repoAgents: Record<string, string> = { ...(settingsConfig?.repoAgents || {}) };
+
+  if (!stateExists) {
+    const empty = createEmptyState(settings, extensions);
+    empty.repoAgents = repoAgents;
+    return empty;
   }
 
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;
 
-    const parsedSettings = (parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : {}) as Partial<AppSettings>;
-    const settings: AppSettings = {
-      ...DEFAULT_SETTINGS,
-      ...parsedSettings,
-      dryRun: Boolean(parsedSettings.dryRun ?? parsed.dryRun ?? DEFAULT_SETTINGS.dryRun),
-    };
-
-    const parsedExt = (parsed.extensions && typeof parsed.extensions === 'object' ? parsed.extensions : {}) as Partial<AppExtensions>;
-    const extensions: AppExtensions = {
-      streamdeck: {
-        ...DEFAULT_EXTENSIONS.streamdeck,
-        ...(parsedExt.streamdeck || {}),
-      },
-    };
-
-    const repoAgents: Record<string, string> = (parsed.repoAgents && typeof parsed.repoAgents === 'object')
-      ? (parsed.repoAgents as Record<string, string>)
-      : {};
+    // Fallback: If legacy state.json had inline settings and settingsConfig wasn't found
+    if (!settingsConfig && parsed.settings && typeof parsed.settings === 'object') {
+      Object.assign(settings, parsed.settings);
+    }
+    if (!settingsConfig && parsed.extensions && typeof parsed.extensions === 'object') {
+      Object.assign(extensions, parsed.extensions);
+    }
+    if (!settingsConfig && parsed.repoAgents && typeof parsed.repoAgents === 'object') {
+      Object.assign(repoAgents, parsed.repoAgents);
+    }
+    if (parsed.settings && typeof parsed.settings === 'object') {
+      const ps = parsed.settings as Record<string, unknown>;
+      if (ps.dryRun !== undefined) settings.dryRun = Boolean(ps.dryRun);
+    }
+    if (parsed.dryRun !== undefined) {
+      settings.dryRun = Boolean(parsed.dryRun);
+    }
 
     const customAgents: Record<string, AgentDefinition> = (parsed.customAgents && typeof parsed.customAgents === 'object')
       ? (parsed.customAgents as Record<string, AgentDefinition>)
@@ -220,6 +337,33 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
   } catch {
     return null;
   }
+}
+
+export function resetState(cwd: string = process.cwd()): void {
+  const statePath = resolveStatePath(cwd);
+  if (fs.existsSync(statePath)) {
+    try {
+      fs.unlinkSync(statePath);
+    } catch {
+      // Ignore unlink error
+    }
+  }
+}
+
+export function resetSettings(cwd: string = process.cwd()): void {
+  const settingsPath = resolveSettingsPath(cwd);
+  if (fs.existsSync(settingsPath)) {
+    try {
+      fs.unlinkSync(settingsPath);
+    } catch {
+      // Ignore unlink error
+    }
+  }
+}
+
+export function resetAll(cwd: string = process.cwd()): void {
+  resetState(cwd);
+  resetSettings(cwd);
 }
 
 // ── Historical Stats Recording ──────────────────────────────────────────────

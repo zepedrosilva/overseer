@@ -195,6 +195,12 @@ export interface AppExtensions {
   streamdeck: StreamDeckExtensionConfig;
 }
 
+export interface SettingsConfigFile {
+  settings?: Partial<AppSettings>;
+  extensions?: Partial<AppExtensions>;
+  repoAgents?: Record<string, string>;
+}
+
 // ── Historical PR & Stats Records ──────────────────────────────────────────
 
 export interface HistoricalPrRecord {
