@@ -40,7 +40,7 @@ This repository is monitored and maintained by Antigravity (AGY) and AI pair pro
 - **Continuous Green State**: Before concluding any task or reporting completion to the user, ensure all unit tests pass with a 100% pass rate and TypeScript emits zero errors. Never disable or skip tests simply to bypass failures.
 
 ### 3.3 State & Worktree Safety (Strict Local Rule)
-- **100% Strictly Local**: Always store all runtime state (`state.json`), logs (`./.overseer/logs/`), and temporary worktrees (`./.overseer/worktrees/`) strictly inside the local project `./.overseer/` folder. Never write anything outside the local workspace (no `~/.cache`, no global directories, no `/tmp`).
+- **100% Strictly Local (No Global Files)**: Always store all runtime state (`state.json`), modular configs (`agents.json`), logs (`./.overseer/logs/`), and temporary worktrees (`./.overseer/worktrees/`) strictly inside the local project `./.overseer/` folder. Never create or read global files outside the local workspace (no `~/.config/`, no `~/.cache`, no global directories, no `/tmp`).
 - **Automatic Cleanup on Merge/Close**: When a PR is merged or closed, all associated local worktrees and agent execution log files **must be deleted automatically**.
 - **Credential Hygiene**: Never write credentials, raw tokens, or secrets to disk. Rely exclusively on `gh` CLI ambient authentication.
 

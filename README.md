@@ -17,7 +17,7 @@
 - **⚙️ Live Settings & Extensions Modal (<kbd>s</kbd>)**: Interactively adjust default agents, polling intervals, search queries, dry-run mode, and toggle the Local API server on the fly with live state persistence.
 - **📄 Interactive Diff Pop-Up Modal (<kbd>d</kbd>)**: View syntax-colorized git diffs directly inside a modal window without leaving the dashboard, with fast file jumping (<kbd>n</kbd>/<kbd>p</kbd>) and in-memory caching.
 - **📜 Live Agent Logs Pop-Up Modal (<kbd>L</kbd>)**: Non-blocking background worker execution! Browse and action other PRs freely while table rows display animated worker spinners (e.g. `⠋ claude 2m`), and press <kbd>L</kbd> on any PR anytime to inspect live or historical logs.
-- **🤖 2-Step Agent Selection (<kbd>a</kbd>)**: Select and persist AI agents per repository (`claude`, `agy`, `gemini`, `pi`) with instant `<Enter>` confirmation, followed by optional custom prompt execution in isolated worktrees.
+- **🤖 2-Step Agent Selection (<kbd>a</kbd>)**: Select and persist AI agents per repository (`claude`, `agy`, `gemini`, `pi`, or custom agents) with instant `<Enter>` confirmation, followed by optional custom prompt execution in isolated worktrees.
 - **🖥️ Flicker-Free Terminal UI**: Built with a custom ANSI engine using the Alternate Screen Buffer (`\x1b[?1049h`), responsive full-width tables, and interactive pop-up modals that adapt to small and wide windows.
 - **⌨️ Interactive Keyboard Actions**:
   - `[Enter]` / `[v]` Open interactive pop-up details modal (scrollable CI checks, reviews, and logs)
@@ -198,6 +198,26 @@ When you press `[a]` on a selected PR:
 1. **Step 1 (Agent Picker)**: Overseer shows the current assigned agent for that repository pre-selected (e.g. `● [1] claude  ○ [2] agy  ○ [3] pi ...`). Pressing <kbd>Enter</kbd> accepts it, or pressing <kbd>1-N</kbd> / <kbd>←/→</kbd> selects a different agent and automatically persists it to `./.overseer/state.json`.
 2. **Step 2 (Prompt Entry)**: Input an optional custom prompt (e.g., `Fix typing error in billing controller`) and press <kbd>Enter</kbd>.
 3. **Execution**: Overseer provisions an isolated git worktree inside `./.overseer/worktrees/<owner>-<repo>-<number>/`, checks out the PR branch, and dispatches the AI agent. Logs stream in real-time to the Details panel.
+
+### 🧩 Custom Local Agents (`./.overseer/agents.json`)
+
+You can define custom CLI agents or bot comment triggers locally in the gitignored `./.overseer/agents.json` file without modifying source code:
+
+```json
+{
+  "customAgents": {
+    "opencode": {
+      "command": "opencode run --repo {owner}/{repo} --pr {pr} \"{prompt}\"",
+      "description": "OpenCode autonomous agentic CLI"
+    },
+    "copilot": {
+      "command": "gh pr comment {pr} --repo {owner}/{repo} --body \"/copilot {prompt}\"",
+      "description": "GitHub Copilot PR comment trigger"
+    }
+  },
+  "disabledAgents": ["pi"]
+}
+```
 
 ---
 
