@@ -65,6 +65,10 @@ export function calculateStats(
       unresolvedThreadsCount: pr.unresolvedThreadsCount || 0,
       ciStatus: pr.ciStatus,
       scope: pr.scope || 'mine',
+      reviewVerdict: pr.reviewVerdict,
+      requestedReviewers: pr.requestedReviewers,
+      approvedReviewers: pr.approvedReviewers,
+      changesRequestedReviewers: pr.changesRequestedReviewers,
     });
   }
 
@@ -233,6 +237,51 @@ export function calculateStats(
     return delta > 0 ? 'up' : 'down';
   };
 
+  // Compute Rework Rate (% of PRs with changes requested)
+  let reworkCount = 0;
+  for (const r of filtered) {
+    const isChangesRequested =
+      r.reviewVerdict === 'CHANGES_REQUESTED' ||
+      Boolean(r.changesRequestedReviewers && r.changesRequestedReviewers.length > 0);
+    if (isChangesRequested) {
+      reworkCount++;
+    }
+  }
+  const reworkRatePercent = totalPRs > 0 ? Math.round((reworkCount / totalPRs) * 100) : 0;
+
+  // Track Review Requests vs Responses across members
+  const memberRequestsMap = new Map<string, number>();
+  const memberReviewsGivenMap = new Map<string, number>();
+
+  for (const r of filtered) {
+    const reqList = (r.requestedReviewers || []).map((u) => u.toLowerCase());
+    const appList = (r.approvedReviewers || []).map((u) => u.toLowerCase());
+    const crList = (r.changesRequestedReviewers || []).map((u) => u.toLowerCase());
+
+    const allReviewersOnPr = new Set([...appList, ...crList]);
+    for (const rev of allReviewersOnPr) {
+      memberReviewsGivenMap.set(rev, (memberReviewsGivenMap.get(rev) || 0) + 1);
+    }
+
+    const allRequestedOrReviewed = new Set([...reqList, ...allReviewersOnPr]);
+    for (const req of allRequestedOrReviewed) {
+      memberRequestsMap.set(req, (memberRequestsMap.get(req) || 0) + 1);
+    }
+  }
+
+  let totalTeamRequests = 0;
+  let totalTeamReviews = 0;
+  for (const m of (data.teamMembers || [])) {
+    const mLower = m.toLowerCase();
+    totalTeamRequests += (memberRequestsMap.get(mLower) || 0);
+    totalTeamReviews += (memberReviewsGivenMap.get(mLower) || 0);
+  }
+
+  const reviewResponseRatePercent =
+    totalTeamRequests > 0
+      ? Math.min(100, Math.round((totalTeamReviews / totalTeamRequests) * 100))
+      : 100;
+
   // Compute per-member stats for team view
   let memberBreakdown: AggregatedStats['memberBreakdown'] = undefined;
   if (scope === 'team') {
@@ -258,10 +307,14 @@ export function calculateStats(
       });
     }
 
+    const hasConfiguredTeam = (data.teamMembers || []).length > 0;
     for (const r of filtered) {
       const authorKey = r.author.toLowerCase();
       let mStats = memberMap.get(authorKey);
       if (!mStats) {
+        if (hasConfiguredTeam) {
+          continue;
+        }
         mStats = {
           author: r.author,
           merged: 0,
@@ -300,6 +353,13 @@ export function calculateStats(
         const memberMerged60 = records60.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
         const memberMerged90 = records90.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
 
+        const requestsReceived = memberRequestsMap.get(authorLower) || 0;
+        const reviewsGiven = memberReviewsGivenMap.get(authorLower) || 0;
+        const responseRatePercent =
+          requestsReceived > 0
+            ? Math.min(100, Math.round((reviewsGiven / requestsReceived) * 100))
+            : 100;
+
         return {
           rank: 1,
           author: m.author,
@@ -314,6 +374,9 @@ export function calculateStats(
           total: m.total,
           discussionDensity: m.total > 0 ? Number((m.commentsCount / m.total).toFixed(1)) : 0,
           bottlenecksCount: m.bottlenecksCount,
+          requestsReceived,
+          reviewsGiven,
+          responseRatePercent,
         };
       })
       .sort((a, b) => {
@@ -337,6 +400,12 @@ export function calculateStats(
         }
         if (sortBy === 'stale') {
           return b.bottlenecksCount - a.bottlenecksCount || b.total - a.total;
+        }
+        if (sortBy === 'response') {
+          return (b.responseRatePercent ?? 0) - (a.responseRatePercent ?? 0) || (b.reviewsGiven ?? 0) - (a.reviewsGiven ?? 0);
+        }
+        if (sortBy === 'reviews') {
+          return (b.reviewsGiven ?? 0) - (a.reviewsGiven ?? 0) || (b.responseRatePercent ?? 0) - (a.responseRatePercent ?? 0);
         }
         // Default 'merged30'
         return b.merged30 - a.merged30 || b.merged60 - a.merged60 || b.merged90 - a.merged90;
@@ -400,6 +469,8 @@ export function calculateStats(
     totalCiRuns,
     passedCiRuns,
     reviewDensityCommentsPerPR,
+    reviewResponseRatePercent,
+    reworkRatePercent,
     staleBottlenecks,
     memberBreakdown,
     trends,

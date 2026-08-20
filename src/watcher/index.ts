@@ -263,10 +263,10 @@ export async function pollAllRepos(
       // If rate limited, record until timestamp
       if (isRateLimited) {
         try {
-          const rateInfo = await checkRateLimit();
-          data.rateLimitedUntil = rateInfo.resetEpochMs || (Date.now() + 15 * 60 * 1000);
+          const rateInfo = await checkRateLimit(isSearchMode ? 'search' : 'graphql');
+          data.rateLimitedUntil = rateInfo.resetEpochMs || (Date.now() + 60 * 1000);
         } catch {
-          data.rateLimitedUntil = Date.now() + 15 * 60 * 1000;
+          data.rateLimitedUntil = Date.now() + 60 * 1000;
         }
       }
 

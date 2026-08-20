@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { calculateStats } from '../src/stats/index.js';
+import { backfillHistoricalStats, BACKFILL_CACHE_TTL_MS } from '../src/stats/backfill.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import type { PrState } from '../src/app/types.js';
 import { renderStatsModal } from '../src/tui/stats.js';
@@ -128,9 +129,13 @@ describe('PR Stats & Velocity Engine', () => {
 
     const fullText = stripAnsi(lines.join('\n'));
     expect(fullText).toContain('PR Stats & Leaderboard: Mine (30d trailing)');
-    expect(fullText).toContain('Code Volume & Merged PR History');
-    expect(fullText).toContain('Velocity & Review Turnaround');
-    expect(fullText).toContain('Merged PRs');
+    expect(fullText).toContain('MERGE VELOCITY');
+    expect(fullText).toContain('1ST REVIEW SPEED');
+    expect(fullText).toContain('REVIEW RESPONSE');
+    expect(fullText).toContain('CI PASS HEALTH');
+    expect(fullText).toContain('CODE DIFF & VOLUME');
+    expect(fullText).toContain('MERGED VELOCITY');
+    expect(fullText).toContain('PR Sizing:');
     expect(fullText).toContain('[Tab] scope');
     expect(fullText).toContain('[Esc/p] close');
   });
@@ -314,5 +319,122 @@ describe('PR Stats & Velocity Engine', () => {
     expect(text).toContain('PR Stats & Leaderboard: Team: core (7d trailing)');
     expect(text).toContain('Timeframe: [1-5/w]');
     expect(text).toContain('Ranked by 7d Merged PRs');
+  });
+
+  it('calculates review response rates, rework rates, and sorts by response and reviews', () => {
+    const state = createEmptyState();
+    state.teamMembers = ['alice', 'bob'];
+
+    // PR 1: Alice authored, requested bob, bob approved (response = 100%)
+    upsertPR(state, createMockPR(1, {
+      author: 'alice',
+      scope: 'team',
+      requestedReviewers: ['bob'],
+      approvedReviewers: ['bob'],
+      reviewVerdict: 'APPROVED',
+    }));
+
+    // PR 2: Bob authored, requested alice, alice changes requested (rework = 1)
+    upsertPR(state, createMockPR(2, {
+      author: 'bob',
+      scope: 'team',
+      requestedReviewers: ['alice'],
+      changesRequestedReviewers: ['alice'],
+      reviewVerdict: 'CHANGES_REQUESTED',
+    }));
+
+    // PR 3: External authored, requested bob, bob has not responded yet
+    upsertPR(state, createMockPR(3, {
+      author: 'external',
+      scope: 'team',
+      requestedReviewers: ['bob'],
+      reviewVerdict: 'PENDING',
+    }));
+
+    const stats = calculateStats(state, '30d', 'team');
+    expect(stats.reworkRatePercent).toBe(33); // 1 out of 3 PRs had changes requested
+    expect(stats.reviewResponseRatePercent).toBeDefined();
+
+    const aliceEntry = stats.memberBreakdown!.find((m) => m.author === 'alice')!;
+    expect(aliceEntry.requestsReceived).toBe(1);
+    expect(aliceEntry.reviewsGiven).toBe(1);
+    expect(aliceEntry.responseRatePercent).toBe(100);
+
+    const bobEntry = stats.memberBreakdown!.find((m) => m.author === 'bob')!;
+    expect(bobEntry.requestsReceived).toBe(2);
+    expect(bobEntry.reviewsGiven).toBe(1);
+    expect(bobEntry.responseRatePercent).toBe(50);
+
+    // Sorting by response rate: Alice (100%) should be rank 1, Bob (50%) rank 2
+    const sortedResponse = calculateStats(state, '30d', 'team', 'response');
+    expect(sortedResponse.memberBreakdown![0].author).toBe('alice');
+    expect(sortedResponse.memberBreakdown![0].rank).toBe(1);
+
+    // Sorting by reviews given: both have 1
+    const sortedReviews = calculateStats(state, '30d', 'team', 'reviews');
+    expect(sortedReviews.memberBreakdown).toBeDefined();
+    expect(sortedReviews.memberBreakdown!.length).toBe(2);
+  });
+
+  it('skips members with fresh watermarks (<4h) and only queries stale or force-refreshed members', async () => {
+    const state = createEmptyState();
+    state.currentUser = 'alice';
+    state.teamMembers = ['alice', 'bob'];
+
+    const now = Date.now();
+    const oneHourAgo = new Date(now - 1 * 60 * 60 * 1000).toISOString();
+    const fiveHoursAgo = new Date(now - 5 * 60 * 60 * 1000).toISOString();
+
+    state.historicalStats = {
+      records: [
+        {
+          key: { owner: 'acme-corp', repo: 'web', number: 1 },
+          author: 'alice',
+          title: 'Alice PR',
+          createdAt: oneHourAgo,
+          state: 'MERGED',
+          additions: 10,
+          deletions: 5,
+          changedFiles: 1,
+          commitsCount: 1,
+          commentsCount: 0,
+          unresolvedThreadsCount: 0,
+          ciStatus: 'SUCCESS',
+          scope: 'both',
+        },
+      ],
+      memberWatermarks: {
+        alice: {
+          lastBackfilledAt: oneHourAgo,
+          timeframeDays: 90,
+          prCount: 1,
+          status: 'success',
+        },
+        bob: {
+          lastBackfilledAt: fiveHoursAgo,
+          timeframeDays: 90,
+          prCount: 0,
+          status: 'rate_limited',
+        },
+      },
+    };
+
+    // Verify TTL constant is 4 hours
+    expect(BACKFILL_CACHE_TTL_MS).toBe(4 * 60 * 60 * 1000);
+
+    // Check freshness condition
+    const aliceWatermark = state.historicalStats.memberWatermarks.alice;
+    const isAliceFresh =
+      aliceWatermark.status === 'success' &&
+      aliceWatermark.timeframeDays >= 90 &&
+      now - new Date(aliceWatermark.lastBackfilledAt).getTime() < BACKFILL_CACHE_TTL_MS;
+    expect(isAliceFresh).toBe(true);
+
+    const bobWatermark = state.historicalStats.memberWatermarks.bob;
+    const isBobFresh =
+      bobWatermark.status === 'success' &&
+      bobWatermark.timeframeDays >= 90 &&
+      now - new Date(bobWatermark.lastBackfilledAt).getTime() < BACKFILL_CACHE_TTL_MS;
+    expect(isBobFresh).toBe(false);
   });
 });

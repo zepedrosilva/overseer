@@ -17,6 +17,7 @@ import type {
   AppConfig,
   HistoricalPrRecord,
   HistoricalStatsStore,
+  MemberBackfillWatermark,
 } from './types.js';
 import { prKeyToString } from './types.js';
 
@@ -87,6 +88,11 @@ export function createEmptyState(
 }
 
 export function saveState(data: AppState, customPath?: string, cwd: string = process.cwd()): void {
+  // Safety guard: Automated tests running in Vitest must never overwrite live project state in process.cwd()
+  if (process.env.VITEST && !customPath && path.resolve(cwd) === path.resolve(process.cwd())) {
+    return;
+  }
+
   const filePath = customPath || resolveStatePath(cwd);
   const dir = path.dirname(filePath);
 
@@ -178,9 +184,17 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       ? (parsed.teamProfiles as Record<string, { login: string; name?: string }>)
       : undefined;
     let historicalStats: HistoricalStatsStore = { records: [] };
-    if (parsed.historicalStats && typeof parsed.historicalStats === 'object' && Array.isArray((parsed.historicalStats as any).records)) {
+    if (parsed.historicalStats && typeof parsed.historicalStats === 'object') {
+      const histObj = parsed.historicalStats as Record<string, unknown>;
+      const records = Array.isArray(histObj.records)
+        ? (histObj.records as any[]).filter((r: any) => r && r.key && r.createdAt)
+        : [];
+      const memberWatermarks = (histObj.memberWatermarks && typeof histObj.memberWatermarks === 'object')
+        ? (histObj.memberWatermarks as Record<string, MemberBackfillWatermark>)
+        : undefined;
       historicalStats = {
-        records: (parsed.historicalStats as any).records.filter((r: any) => r && r.key && r.createdAt),
+        records,
+        memberWatermarks,
       };
     }
 

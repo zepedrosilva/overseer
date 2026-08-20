@@ -258,5 +258,34 @@ describe('State Store & Persistence', () => {
 
       expect(loaded?.rateLimitedUntil).toBe(resetTime);
     });
+
+    it('persists and restores memberWatermarks in historicalStats correctly', () => {
+      const state = createEmptyState();
+      state.historicalStats = {
+        records: [],
+        memberWatermarks: {
+          alice: {
+            lastBackfilledAt: '2026-08-20T10:00:00.000Z',
+            timeframeDays: 90,
+            prCount: 15,
+            status: 'success',
+          },
+          bob: {
+            lastBackfilledAt: '2026-08-20T10:00:00.000Z',
+            timeframeDays: 90,
+            prCount: 0,
+            status: 'rate_limited',
+          },
+        },
+      };
+
+      saveState(state, customStatePath);
+      const loaded = loadState(customStatePath);
+
+      expect(loaded?.historicalStats?.memberWatermarks).toBeDefined();
+      expect(loaded?.historicalStats?.memberWatermarks?.alice.prCount).toBe(15);
+      expect(loaded?.historicalStats?.memberWatermarks?.alice.status).toBe('success');
+      expect(loaded?.historicalStats?.memberWatermarks?.bob.status).toBe('rate_limited');
+    });
   });
 });
