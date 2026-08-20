@@ -1,11 +1,42 @@
 {
   "name": "overseer",
   "version": "0.1.0",
-  "description": "Terminal PR dashboard and management tool with AI agent triage",
+  "description": "High-performance terminal UI dashboard and management tool for GitHub Pull Requests with AI agent triage",
   "type": "module",
   "bin": {
     "overseer": "dist/main.js"
   },
+  "author": "José Silva (https://github.com/zepedrosilva)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zepedrosilva/overseer.git"
+  },
+  "homepage": "https://github.com/zepedrosilva/overseer#readme",
+  "bugs": {
+    "url": "https://github.com/zepedrosilva/overseer/issues"
+  },
+  "keywords": [
+    "tui",
+    "terminal",
+    "github",
+    "pull-requests",
+    "dashboard",
+    "cli",
+    "rest-api",
+    "sse",
+    "ai-agents",
+    "worktree",
+    "developer-tools"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/main.js",
