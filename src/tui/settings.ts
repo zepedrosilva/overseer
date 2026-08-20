@@ -17,9 +17,12 @@ export interface SettingsModalOptions {
 
 export const SETTINGS_ITEMS = [
   { id: 'defaultAgent', label: 'Default AI Agent', section: 'DEFAULTS' },
-  { id: 'pollInterval', label: 'Poll Interval', section: 'DEFAULTS' },
+  { id: 'pollInterval', label: 'Personal Poll Interval', section: 'DEFAULTS' },
   { id: 'filterUserOnly', label: 'Filter Involving @me Only', section: 'DEFAULTS' },
   { id: 'dryRun', label: 'Dry-Run Mode', section: 'DEFAULTS' },
+  { id: 'recentPrWindowDays', label: 'Recent Work Window', section: 'TEAM & SCOPE' },
+  { id: 'teamActiveWindowDays', label: 'Team Open PR Max Age', section: 'TEAM & SCOPE' },
+  { id: 'teamPollInterval', label: 'Team Poll Interval', section: 'TEAM & SCOPE' },
   { id: 'team', label: 'Team Slug / Members', section: 'TEAM & SCOPE' },
   { id: 'searchQuery', label: 'Search Query Override', section: 'TEAM & SCOPE' },
   { id: 'apiEnabled', label: 'Local API Server', section: 'EXTENSIONS' },
@@ -27,6 +30,9 @@ export const SETTINGS_ITEMS = [
 ] as const;
 
 export const POLL_INTERVALS = [15, 30, 60, 120, 300];
+export const RECENT_WINDOW_OPTIONS = [1, 2, 7, 14];
+export const TEAM_ACTIVE_WINDOW_OPTIONS = [14, 30, 60, 90, 0];
+export const TEAM_POLL_INTERVALS = [30, 60, 120, 300, 600];
 
 export function renderSettingsModal(options: SettingsModalOptions): string[] {
   const { state, selectedIndex, isEditingText, editBuffer, modalWidth = 86, modalHeight = 20 } = options;
@@ -65,7 +71,7 @@ export function renderSettingsModal(options: SettingsModalOptions): string[] {
     }
 
     const pointer = isSelected ? `\x1B[${rgbColor(colors.cyan)}▸\x1B[0m ` : '  ';
-    const labelColor = isSelected ? `\x1B[1;37m` : `\x1B[${rgbColor(colors.fgDim)}]`;
+    const labelColor = isSelected ? `\x1B[1;37m` : `\x1B[${rgbColor(colors.fgDim)}`;
     const label = `${labelColor}${item.label.padEnd(28)}\x1B[0m`;
 
     let valueStr = '';
@@ -76,6 +82,30 @@ export function renderSettingsModal(options: SettingsModalOptions): string[] {
     } else if (item.id === 'pollInterval') {
       const cur = state.settings.pollIntervalSecs || 30;
       valueStr = `\x1B[${rgbColor(colors.cyan)}< ${cur}s >\x1B[0m  \x1B[${rgbColor(colors.fgMuted)}(${POLL_INTERVALS.map((s) => `${s}s`).join(', ')})\x1B[0m`;
+    } else if (item.id === 'recentPrWindowDays') {
+      const cur = state.settings.recentPrWindowDays || 7;
+      const labelMap: Record<number, string> = {
+        1: '1 day (24h)',
+        2: '2 days (48h)',
+        7: '7 days (1w)',
+        14: '14 days (2w)',
+      };
+      const curLabel = labelMap[cur] || `${cur} days`;
+      valueStr = `\x1B[${rgbColor(colors.cyan)}< ${curLabel} >\x1B[0m  \x1B[${rgbColor(colors.fgMuted)}(24h, 48h, 7d, 14d)\x1B[0m`;
+    } else if (item.id === 'teamActiveWindowDays') {
+      const cur = state.settings.teamActiveWindowDays ?? 30;
+      const labelMap: Record<number, string> = {
+        14: '14 days (2w)',
+        30: '30 days (1m)',
+        60: '60 days (2m)',
+        90: '90 days (3m)',
+        0: 'All (no limit)',
+      };
+      const curLabel = labelMap[cur] || (cur === 0 ? 'All' : `${cur} days`);
+      valueStr = `\x1B[${rgbColor(colors.cyan)}< ${curLabel} >\x1B[0m  \x1B[${rgbColor(colors.fgMuted)}(14d, 30d, 60d, 90d, All)\x1B[0m`;
+    } else if (item.id === 'teamPollInterval') {
+      const cur = state.settings.teamPollIntervalSecs || 120;
+      valueStr = `\x1B[${rgbColor(colors.cyan)}< ${cur}s >\x1B[0m  \x1B[${rgbColor(colors.fgMuted)}(${TEAM_POLL_INTERVALS.map((s) => `${s}s`).join(', ')})\x1B[0m`;
     } else if (item.id === 'team') {
       if (isSelected && isEditingText) {
         valueStr = `\x1B[${rgbColor(colors.cyan)}${editBuffer}\x1B[7m \x1B[0m\x1B[0m  \x1B[${rgbColor(colors.fgDim)}[Enter] save\x1B[0m`;

@@ -31,7 +31,7 @@ ${queries}
 }
 
 fragment RepoPullRequests on Repository {
-  pullRequests(states: OPEN, first: ${prLimit}, orderBy: { field: UPDATED_AT, direction: DESC }) {
+  pullRequests(states: [OPEN, MERGED, CLOSED], first: ${prLimit}, orderBy: { field: UPDATED_AT, direction: DESC }) {
     nodes {
       number
       title
@@ -224,6 +224,7 @@ export interface ParseGraphQLBatchOptions {
   currentUser?: string;
   filterUserOnly?: boolean;
   team?: string;
+  teamMembers?: string[];
   isTeamQuery?: boolean;
 }
 
@@ -307,8 +308,8 @@ export function parsePrNode(
     ? options.currentUser.toLowerCase()
     : null;
 
-  // If user-only filter is active, check relevance
-  if (userFilter) {
+  // If user-only filter is active, check relevance (unless this is a team-scoped query)
+  if (userFilter && !options?.isTeamQuery) {
     const isAuthor = author.toLowerCase() === userFilter;
     const isRequestedReviewer = requestedReviewersList.includes(userFilter);
     const isReviewer = reviewAuthorsList.includes(userFilter);
@@ -426,7 +427,10 @@ export function parsePrNode(
        assigneesList.includes(userLogin))
     : true;
 
-  const isTeam = Boolean(options?.isTeamQuery || options?.team);
+  const isTeam = options?.teamMembers && options.teamMembers.length > 0
+    ? options.teamMembers.map((m) => m.toLowerCase()).includes(author.toLowerCase())
+    : Boolean(options?.isTeamQuery || options?.team);
+
   let scope: 'mine' | 'team' | 'both' = 'mine';
   if (isMine && isTeam) {
     scope = 'both';

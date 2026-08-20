@@ -73,7 +73,11 @@ function executeGraphQL<T = Record<string, unknown>>(
 
     child.on('close', (code) => {
       if (code !== 0) {
-        return reject(new Error(`gh api graphql failed (code ${code}): ${stderr || stdout}`));
+        const errorMsg = stderr || stdout;
+        const isRateLimit = /rate limit|RATE_LIMITED/i.test(errorMsg);
+        const err = new Error(`gh api graphql failed (code ${code}): ${errorMsg}`);
+        (err as unknown as Record<string, unknown>).isRateLimit = isRateLimit;
+        return reject(err);
       }
 
       try {
@@ -93,6 +97,34 @@ function executeGraphQL<T = Record<string, unknown>>(
   });
 }
 
+export interface RateLimitInfo {
+  isRateLimited: boolean;
+  resetEpochMs?: number;
+  remaining?: number;
+  limit?: number;
+}
+
+export async function checkRateLimit(): Promise<RateLimitInfo> {
+  try {
+    const { stdout } = await execFileAsync('gh', ['api', '/rate_limit']);
+    const parsed = JSON.parse(stdout) as Record<string, { graphql?: { limit?: number; remaining?: number; reset?: number } }>;
+    const graphql = parsed?.resources?.graphql;
+    if (graphql && typeof graphql.remaining === 'number') {
+      const isRateLimited = graphql.remaining <= 0;
+      const resetEpochMs = typeof graphql.reset === 'number' ? graphql.reset * 1000 : undefined;
+      return {
+        isRateLimited,
+        resetEpochMs,
+        remaining: graphql.remaining,
+        limit: graphql.limit,
+      };
+    }
+  } catch {
+    // Non-critical fallback
+  }
+  return { isRateLimited: false };
+}
+
 export async function runGraphQL<T = Record<string, unknown>>(
   query: string,
   variables?: Record<string, unknown>,
@@ -104,7 +136,7 @@ export async function runGraphQL<T = Record<string, unknown>>(
     try {
       return await executeGraphQL<T>(query, variables);
     } catch (err) {
-      if (attempt >= retries) {
+      if ((err as unknown as Record<string, unknown>).isRateLimit || attempt >= retries) {
         throw err;
       }
       await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
@@ -272,6 +304,41 @@ export async function fetchTeamMembers(teamSlug: string): Promise<string[]> {
         .split('\n')
         .map((s) => s.trim().replace(/^@/, ''))
         .filter(Boolean);
+    }
+
+    // If slug without org (e.g. "core-team"), search authenticated user's orgs
+    try {
+      const { stdout: orgsOut } = await execFileAsync('gh', [
+        'api',
+        'user/memberships/orgs',
+        '--jq',
+        '.[].organization.login',
+      ]);
+      const orgs = orgsOut
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      for (const org of orgs) {
+        try {
+          const { stdout: teamMembersOut } = await execFileAsync('gh', [
+            'api',
+            `orgs/${org}/teams/${cleanSlug.replace(/^@/, '')}/members`,
+            '--paginate',
+            '--jq',
+            '.[].login',
+          ]);
+          const members = teamMembersOut
+            .split('\n')
+            .map((s) => s.trim().replace(/^@/, ''))
+            .filter(Boolean);
+          if (members.length > 0) return members;
+        } catch {
+          // Continue to next org
+        }
+      }
+    } catch {
+      // Non-critical fallback
     }
 
     return [cleanSlug.replace(/^@/, '')];

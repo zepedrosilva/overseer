@@ -33,6 +33,7 @@ interface CliArgs {
   port?: number;
   agent?: string;
   poll?: number;
+  pollTeam?: number;
   dryRun?: boolean;
   search?: string;
   user?: string;
@@ -62,6 +63,12 @@ function parseCliArgs(): CliArgs {
     } else if (arg === '--poll' && args[i + 1]) {
       const sec = parseInt(args[++i], 10);
       if (!isNaN(sec)) result.poll = sec;
+    } else if (arg === '--poll-team' || arg === '--team-poll') {
+      const sec = parseInt(args[++i], 10);
+      if (!isNaN(sec)) result.pollTeam = sec;
+    } else if (arg.startsWith('--poll-team=') || arg.startsWith('--team-poll=')) {
+      const sec = parseInt(arg.split('=')[1], 10);
+      if (!isNaN(sec)) result.pollTeam = sec;
     } else if (arg === '--dry-run') {
       result.dryRun = true;
     } else if (arg === '--search' && args[i + 1]) {
@@ -87,6 +94,7 @@ async function main(): Promise<void> {
   if (cli.port !== undefined) data.extensions.api.port = cli.port;
   if (cli.agent !== undefined) data.settings.defaultAgent = cli.agent;
   if (cli.poll !== undefined) data.settings.pollIntervalSecs = Math.max(5, cli.poll);
+  if (cli.pollTeam !== undefined) data.settings.teamPollIntervalSecs = Math.max(10, cli.pollTeam);
   if (cli.dryRun !== undefined) {
     data.settings.dryRun = cli.dryRun;
     data.dryRun = cli.dryRun;
@@ -104,7 +112,8 @@ async function main(): Promise<void> {
   // 3. Action Handlers Forward Reference
   let tui: TUIController;
   let apiServer: ApiServerController | null = null;
-  let pollTimer: NodeJS.Timeout | null = null;
+  let minePollTimer: NodeJS.Timeout | null = null;
+  let teamPollTimer: NodeJS.Timeout | null = null;
 
   function syncApiServer(): void {
     const isEnabled = data.extensions.api.enabled;
@@ -131,19 +140,31 @@ async function main(): Promise<void> {
   }
 
   function reschedulePollTimer(): void {
-    if (pollTimer) clearInterval(pollTimer);
-    const intervalMs = Math.max(5, data.settings.pollIntervalSecs || 30) * 1000;
-    pollTimer = setInterval(() => {
-      runPollCycle().catch(() => {});
-    }, intervalMs);
+    if (minePollTimer) clearInterval(minePollTimer);
+    if (teamPollTimer) clearInterval(teamPollTimer);
+
+    // 1. Personal Poll Interval
+    const mineIntervalMs = Math.max(5, data.settings.pollIntervalSecs || 30) * 1000;
+    minePollTimer = setInterval(() => {
+      runPollCycle('mine').catch(() => {});
+    }, mineIntervalMs);
+
+    // 2. Team Poll Interval (only if team configured)
+    if (data.settings.team) {
+      const teamIntervalMs = Math.max(10, data.settings.teamPollIntervalSecs || 120) * 1000;
+      teamPollTimer = setInterval(() => {
+        runPollCycle('team').catch(() => {});
+      }, teamIntervalMs);
+    }
   }
 
   async function handleAction(action: string, payload?: Record<string, unknown>): Promise<void> {
     const pr = (payload?.pr as PrState) || tui?.getSelectedPR();
 
     if (action === 'recheck') {
-      appendLog(data, pr?.key || { owner: 'all', repo: 'repos', number: 0 }, 'Manual refresh requested');
-      await runPollCycle();
+      const targetScope = data.viewScope === 'team' ? 'team' : 'mine';
+      appendLog(data, pr?.key || { owner: 'all', repo: 'repos', number: 0 }, `Manual ${targetScope} refresh requested`);
+      await runPollCycle(targetScope);
       tui?.render();
       return;
     }
@@ -280,6 +301,7 @@ async function main(): Promise<void> {
     syncApiServer();
     reschedulePollTimer();
     saveState(data);
+    runPollCycle().catch(() => {});
     tui?.render();
   }
 
@@ -299,9 +321,9 @@ async function main(): Promise<void> {
   syncApiServer();
 
   // 6. Asynchronous Background Auth & Initial Poll
-  async function runPollCycle(): Promise<void> {
+  async function runPollCycle(scope: 'all' | 'mine' | 'team' = 'all'): Promise<void> {
     try {
-      await pollAllRepos(data, appStateToAppConfig(data));
+      await pollAllRepos(data, appStateToAppConfig(data), scope);
       apiServer?.broadcast('pollCompleted', {
         reposCount: data.repos.length,
         prsCount: data.prs.size,
@@ -332,8 +354,8 @@ async function main(): Promise<void> {
       }
     }
 
-    // Run first background poll
-    await runPollCycle();
+    // Run first background poll (fetch all personal + team PRs)
+    await runPollCycle('all');
   })().catch(() => {});
 
   // 7. Watcher Polling Interval
@@ -343,7 +365,8 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => handleQuit());
 
   async function handleQuit(): Promise<void> {
-    if (pollTimer) clearInterval(pollTimer);
+    if (minePollTimer) clearInterval(minePollTimer);
+    if (teamPollTimer) clearInterval(teamPollTimer);
     if (apiServer) {
       await apiServer.close();
     }

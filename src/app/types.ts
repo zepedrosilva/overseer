@@ -176,6 +176,9 @@ export interface AppSettings {
   filterUserOnly: boolean;
   searchQuery: string;
   dryRun: boolean;
+  recentPrWindowDays?: number;
+  teamActiveWindowDays?: number;
+  teamPollIntervalSecs?: number;
 }
 
 export interface ApiServerConfig {
@@ -212,7 +215,7 @@ export interface HistoricalStatsStore {
   records: HistoricalPrRecord[];
 }
 
-export type StatsTimeframe = '30d' | '60d' | '90d';
+export type StatsTimeframe = '7d' | '14d' | '30d' | '60d' | '90d';
 
 export interface TrendDelta {
   delta60: number;
@@ -230,12 +233,14 @@ export interface MetricTrends {
   discussionDensity?: TrendDelta;
 }
 
-export type LeaderboardSort = 'merged30' | 'merged60' | 'merged90' | 'total' | 'comments' | 'stale';
+export type LeaderboardSort = 'merged7' | 'merged14' | 'merged30' | 'merged60' | 'merged90' | 'total' | 'comments' | 'stale';
 
 export interface MemberLeaderboardEntry {
   rank: number;
   author: string;
   name?: string;
+  merged7: number;
+  merged14: number;
   merged30: number;
   merged60: number;
   merged90: number;
@@ -251,6 +256,8 @@ export interface AggregatedStats {
   scope: 'mine' | 'team';
   totalPRs: number;
   mergedPRs: number;
+  mergedPRs7: number;
+  mergedPRs14: number;
   mergedPRs30: number;
   mergedPRs60: number;
   mergedPRs90: number;
@@ -312,6 +319,7 @@ export interface AppState {
   lastPolled?: number;
   isPolling?: boolean;
   currentUser?: string;
+  rateLimitedUntil?: number;
 }
 
 // ── Legacy/Adapter Config Type for Seamless Integration ─────────────────────
@@ -326,6 +334,9 @@ export interface AppConfig {
     team?: string;
     filter_user_only?: boolean;
     search_query?: string;
+    recent_pr_window_days?: number;
+    team_active_window_days?: number;
+    team_poll_interval_secs?: number;
   };
   repos: Array<{ url: string; agent?: string }>;
   agents: Record<string, AgentDefinition>;

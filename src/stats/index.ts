@@ -13,7 +13,7 @@ import { prKeyToString } from '../app/types.js';
 export { backfill30DayStats, backfill90DayStats, backfillHistoricalStats } from './backfill.js';
 
 function getTimeframeCutoffMs(timeframe: StatsTimeframe): number {
-  const days = timeframe === '90d' ? 90 : timeframe === '60d' ? 60 : 30;
+  const days = timeframe === '90d' ? 90 : timeframe === '60d' ? 60 : timeframe === '14d' ? 14 : timeframe === '7d' ? 7 : 30;
   return Date.now() - days * 24 * 60 * 60 * 1000;
 }
 
@@ -190,10 +190,22 @@ export function calculateStats(
 
   const ciPassRatePercent = totalCiRuns > 0 ? Number(((passedCiRuns / totalCiRuns) * 100).toFixed(1)) : 100;
 
-  // Compute 30d, 60d, and 90d slices
+  // Compute 7d, 14d, 30d, 60d, and 90d slices
+  const cutoff7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const cutoff14Ms = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const cutoff30Ms = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const cutoff60Ms = Date.now() - 60 * 24 * 60 * 60 * 1000;
   const cutoff90Ms = Date.now() - 90 * 24 * 60 * 60 * 1000;
+
+  const records7 = scopedRecords.filter((r) => {
+    const time = new Date(r.createdAt).getTime();
+    return !isNaN(time) && time >= cutoff7Ms;
+  });
+
+  const records14 = scopedRecords.filter((r) => {
+    const time = new Date(r.createdAt).getTime();
+    return !isNaN(time) && time >= cutoff14Ms;
+  });
 
   const records30 = scopedRecords.filter((r) => {
     const time = new Date(r.createdAt).getTime();
@@ -210,6 +222,8 @@ export function calculateStats(
     return !isNaN(time) && time >= cutoff90Ms;
   });
 
+  const mergedPRs7 = records7.filter((r) => r.state === 'MERGED').length;
+  const mergedPRs14 = records14.filter((r) => r.state === 'MERGED').length;
   const mergedPRs30 = records30.filter((r) => r.state === 'MERGED').length;
   const mergedPRs60 = records60.filter((r) => r.state === 'MERGED').length;
   const mergedPRs90 = records90.filter((r) => r.state === 'MERGED').length;
@@ -280,6 +294,8 @@ export function calculateStats(
       .map((m) => {
         const authorLower = m.author.toLowerCase();
         const profile = data.teamProfiles?.[authorLower];
+        const memberMerged7 = records7.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
+        const memberMerged14 = records14.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
         const memberMerged30 = records30.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
         const memberMerged60 = records60.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
         const memberMerged90 = records90.filter((r) => r.author.toLowerCase() === authorLower && r.state === 'MERGED').length;
@@ -288,6 +304,8 @@ export function calculateStats(
           rank: 1,
           author: m.author,
           name: profile?.name,
+          merged7: memberMerged7,
+          merged14: memberMerged14,
           merged30: memberMerged30,
           merged60: memberMerged60,
           merged90: memberMerged90,
@@ -299,6 +317,12 @@ export function calculateStats(
         };
       })
       .sort((a, b) => {
+        if (sortBy === 'merged7') {
+          return b.merged7 - a.merged7 || b.merged14 - a.merged14 || b.merged30 - a.merged30;
+        }
+        if (sortBy === 'merged14') {
+          return b.merged14 - a.merged14 || b.merged7 - a.merged7 || b.merged30 - a.merged30;
+        }
         if (sortBy === 'merged90') {
           return b.merged90 - a.merged90 || b.merged60 - a.merged60 || b.merged30 - a.merged30;
         }
@@ -352,6 +376,8 @@ export function calculateStats(
     scope,
     totalPRs,
     mergedPRs,
+    mergedPRs7,
+    mergedPRs14,
     mergedPRs30,
     mergedPRs60,
     mergedPRs90,
