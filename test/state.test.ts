@@ -21,6 +21,8 @@ import {
   getRepoAgent,
   setRepoAgent,
   getAvailableAgents,
+  getAgentDefinition,
+  loadAgentsConfig,
   MAX_PR_LOG_ENTRIES,
 } from '../src/app/state.js';
 import type { AppState, PrState, PrKey, WorkerHandle } from '../src/app/types.js';
@@ -219,11 +221,39 @@ describe('State Store & Persistence', () => {
       setRepoAgent(state, { owner: 'acme-corp', repo: 'web-frontend' }, 'agy');
       expect(getRepoAgent(state, { owner: 'acme-corp', repo: 'web-frontend' })).toBe('agy');
 
-      const agents = getAvailableAgents(state);
+      const agents = getAvailableAgents(state, tmpDir);
       expect(agents).toContain('claude');
       expect(agents).toContain('agy');
       expect(agents).toContain('gemini');
       expect(agents).toContain('pi');
+    });
+
+    it('loads custom agents and filters disabled agents from .overseer/agents.json', async () => {
+      const { loadAgentsConfig } = await import('../src/app/state.js');
+      const agentsDir = path.join(tmpDir, '.overseer');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(agentsDir, 'agents.json'),
+        JSON.stringify({
+          customAgents: {
+            opencode: { command: 'opencode run', description: 'OpenCode CLI' },
+          },
+          disabledAgents: ['pi'],
+        })
+      );
+
+      const loaded = loadAgentsConfig(tmpDir);
+      expect(loaded.customAgents?.opencode?.command).toBe('opencode run');
+      expect(loaded.disabledAgents).toEqual(['pi']);
+
+      const state = createEmptyState();
+      const available = getAvailableAgents(state, tmpDir);
+      expect(available).toContain('opencode');
+      expect(available).toContain('claude');
+      expect(available).not.toContain('pi');
+
+      const def = getAgentDefinition('opencode', state, tmpDir);
+      expect(def.command).toBe('opencode run');
     });
 
     it('preserves MERGED status and timestamps in recordHistoricalPr without accidental downgrades', async () => {

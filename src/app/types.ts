@@ -140,6 +140,11 @@ export interface AgentDefinition {
   description?: string;
 }
 
+export interface AgentsConfigFile {
+  customAgents?: Record<string, AgentDefinition>;
+  disabledAgents?: string[];
+}
+
 export interface AgentResult {
   success: boolean;
   sessionId: string;

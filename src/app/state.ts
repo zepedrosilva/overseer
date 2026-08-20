@@ -14,6 +14,7 @@ import type {
   AppSettings,
   AppExtensions,
   AgentDefinition,
+  AgentsConfigFile,
   AppConfig,
   HistoricalPrRecord,
   HistoricalStatsStore,
@@ -23,6 +24,7 @@ import { prKeyToString } from './types.js';
 
 export const LOCAL_OVERSEER_DIR = '.overseer';
 export const STATE_FILE_NAME = 'state.json';
+export const AGENTS_FILE_NAME = 'agents.json';
 export const MAX_PR_LOG_ENTRIES = 200;
 
 export function resolveStateDir(cwd: string = process.cwd()): string {
@@ -305,16 +307,47 @@ export function setRepoAgent(
   data.repoAgents[key] = agentName;
 }
 
-export function getAvailableAgents(data?: AppState): string[] {
-  const builtin = ['claude', 'agy', 'gemini', 'pi'];
-  const custom = data?.customAgents ? Object.keys(data.customAgents) : [];
-  return Array.from(new Set([...builtin, ...custom]));
+export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile {
+  const agentsPath = path.join(cwd, LOCAL_OVERSEER_DIR, AGENTS_FILE_NAME);
+  if (!fs.existsSync(agentsPath)) {
+    return {};
+  }
+  try {
+    const raw = fs.readFileSync(agentsPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const custom = parsed.customAgents || (parsed.agents ? parsed.agents : undefined);
+    const disabled = Array.isArray(parsed.disabledAgents)
+      ? parsed.disabledAgents
+      : Array.isArray(parsed.disabled)
+      ? parsed.disabled
+      : [];
+    return {
+      customAgents: custom,
+      disabledAgents: disabled,
+    };
+  } catch {
+    return {};
+  }
 }
 
-export function getAgentDefinition(agentName: string, data?: AppState): AgentDefinition {
+export function getAvailableAgents(data?: AppState, cwd?: string): string[] {
+  const localConfig = loadAgentsConfig(cwd);
+  const disabled = new Set(localConfig.disabledAgents || []);
+  const builtin = ['claude', 'agy', 'gemini', 'pi'].filter((a) => !disabled.has(a));
+  const customFromState = data?.customAgents ? Object.keys(data.customAgents) : [];
+  const customFromConfig = localConfig.customAgents ? Object.keys(localConfig.customAgents) : [];
+  return Array.from(new Set([...builtin, ...customFromState, ...customFromConfig]));
+}
+
+export function getAgentDefinition(agentName: string, data?: AppState, cwd?: string): AgentDefinition {
   const norm = agentName.toLowerCase();
   if (data?.customAgents && data.customAgents[agentName]) {
     return data.customAgents[agentName];
+  }
+
+  const localConfig = loadAgentsConfig(cwd);
+  if (localConfig.customAgents && localConfig.customAgents[agentName]) {
+    return localConfig.customAgents[agentName];
   }
 
   switch (norm) {
@@ -333,7 +366,8 @@ export function getAgentDefinition(agentName: string, data?: AppState): AgentDef
   }
 }
 
-export function appStateToAppConfig(data: AppState): AppConfig {
+export function appStateToAppConfig(data: AppState, cwd?: string): AppConfig {
+  const localConfig = loadAgentsConfig(cwd);
   return {
     defaults: {
       agent: data.settings.defaultAgent,
@@ -349,7 +383,7 @@ export function appStateToAppConfig(data: AppState): AppConfig {
       team_poll_interval_secs: data.settings.teamPollIntervalSecs,
     },
     repos: [],
-    agents: { ...data.customAgents },
+    agents: { ...data.customAgents, ...localConfig.customAgents },
     runtime: {
       dryRun: data.dryRun,
     },
