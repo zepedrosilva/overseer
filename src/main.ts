@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // ── Main Entrypoint ──────────────────────────────────────────────────────────
 // Boot sequence, zero-config state management, Stream Deck extension, and TUI lifecycle.
 
