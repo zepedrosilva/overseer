@@ -40,14 +40,15 @@ This repository is monitored and maintained by Antigravity (AGY) and AI pair pro
 - **Continuous Green State**: Before concluding any task or reporting completion to the user, ensure all unit tests pass with a 100% pass rate and TypeScript emits zero errors. Never disable or skip tests simply to bypass failures.
 
 ### 3.3 State & Worktree Safety (Strict Local Rule)
-- **100% Strictly Local (No Global Files)**: Always store all runtime state (`state.json`), modular configs (`agents.json`), logs (`./.overseer/logs/`), and temporary worktrees (`./.overseer/worktrees/`) strictly inside the local project `./.overseer/` folder. Never create or read global files outside the local workspace (no `~/.config/`, no `~/.cache`, no global directories, no `/tmp`).
+- **100% Strictly Local (No Global Files)**: Always store all user settings (`./.overseer/settings.json`), runtime state (`./.overseer/state.json`), modular configs (`./.overseer/agents.json`), logs (`./.overseer/logs/`), and temporary worktrees (`./.overseer/worktrees/`) strictly inside the local project `./.overseer/` folder. Never create or read global files outside the local workspace (no `~/.config/`, no `~/.cache`, no global directories, no `/tmp`).
 - **Automatic Cleanup on Merge/Close**: When a PR is merged or closed, all associated local worktrees and agent execution log files **must be deleted automatically**.
 - **Credential Hygiene**: Never write credentials, raw tokens, or secrets to disk. Rely exclusively on `gh` CLI ambient authentication.
 
 ### 3.4 User Settings Preservation & Test Isolation (Strict Rule)
-- **Never Overwrite or Wipe Live User Settings**: AI agents must never delete, reset, or overwrite existing user settings (such as `team`, `defaultAgent`, `searchQuery`, or polling intervals) in `./.overseer/state.json`.
-- **Deep-Merge on Schema Updates**: Whenever new setting fields are introduced, `loadState()` and configuration loaders must preserve all existing user-configured values while applying defaults only for missing keys.
-- **Test Isolation**: Automated unit tests must always use temporary or mock state paths (e.g. dedicated temp directories or in-memory fixtures) and must never write to or mutate the live `./.overseer/state.json` file.
+- **Never Overwrite or Wipe Live User Settings**: AI agents must never delete, reset, or overwrite existing user settings (such as `team`, `defaultAgent`, `searchQuery`, or polling intervals) in `./.overseer/settings.json` or `./.overseer/state.json`.
+- **Clean Separation of Concerns**: User preferences, team settings, and repo-agent bindings live in `./.overseer/settings.json`, while volatile PR cache, workers, and historical stats live in `./.overseer/state.json`.
+- **Deep-Merge on Schema Updates**: Whenever new setting fields are introduced, `loadSettings()` and configuration loaders must preserve all existing user-configured values while applying defaults only for missing keys.
+- **Test Isolation**: Automated unit tests must always use temporary or mock state paths (e.g. dedicated temp directories or in-memory fixtures) and must never write to or mutate live `./.overseer/settings.json` or `./.overseer/state.json` files.
 
 ### 3.5 Privacy & Zero Proprietary Leakage Standards (Strict Requirement)
 - **Zero Proprietary Data in Code/Docs/Tests**: Never hardcode, commit, or reference private company/organization names, internal team slugs, internal repository names, internal URLs, or real colleague names/usernames in source code, configuration defaults, unit tests, mock fixtures, git commits, or documentation.
