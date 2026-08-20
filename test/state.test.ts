@@ -225,5 +225,38 @@ describe('State Store & Persistence', () => {
       expect(agents).toContain('pi');
       expect(agents).toContain('moxly');
     });
+
+    it('preserves MERGED status and timestamps in recordHistoricalPr without accidental downgrades', async () => {
+      const { recordHistoricalPr } = await import('../src/app/state.js');
+      const state = createEmptyState();
+      const prKey: PrKey = { owner: 'acme-corp', repo: 'web-frontend', number: 101 };
+
+      const mergedPr = createMockPR(prKey, 'Merged');
+      mergedPr.state = 'MERGED';
+      mergedPr.mergedAt = '2026-08-15T12:00:00Z';
+
+      recordHistoricalPr(state, mergedPr);
+      expect(state.historicalStats?.records[0].state).toBe('MERGED');
+      expect(state.historicalStats?.records[0].mergedAt).toBe('2026-08-15T12:00:00Z');
+
+      // Attempting to record as generic CLOSED without closedAt does not overwrite MERGED
+      const closedPr = createMockPR(prKey, 'Closed');
+      closedPr.state = 'CLOSED';
+      recordHistoricalPr(state, closedPr);
+
+      expect(state.historicalStats?.records[0].state).toBe('MERGED');
+      expect(state.historicalStats?.records[0].mergedAt).toBe('2026-08-15T12:00:00Z');
+    });
+
+    it('persists and restores rateLimitedUntil correctly', () => {
+      const state = createEmptyState();
+      const resetTime = Date.now() + 1800000;
+      state.rateLimitedUntil = resetTime;
+
+      saveState(state, customStatePath);
+      const loaded = loadState(customStatePath);
+
+      expect(loaded?.rateLimitedUntil).toBe(resetTime);
+    });
   });
 });

@@ -265,6 +265,29 @@ describe('TUI Components & Engine', () => {
       expect(stripAnsi(mineLines[0])).not.toContain('AUTHOR');
     });
 
+    it('renders Merged and Closed PR rows with appropriate state badges and age formatting', () => {
+      const mergedPr = createMockPR(201, 'Merged');
+      mergedPr.state = 'MERGED';
+      mergedPr.mergedAt = new Date(Date.now() - 3600000).toISOString();
+
+      const closedPr = createMockPR(202, 'Closed');
+      closedPr.state = 'CLOSED';
+      closedPr.closedAt = new Date(Date.now() - 7200000).toISOString();
+
+      const lines = renderTable({
+        prs: [mergedPr, closedPr],
+        selectedIndex: 0,
+        width: 100,
+        height: 6,
+      });
+
+      const fullText = lines.map(stripAnsi).join('\n');
+      expect(fullText).toContain('Merged');
+      expect(fullText).toContain('#201');
+      expect(fullText).toContain('Closed');
+      expect(fullText).toContain('#202');
+    });
+
     it('renders animated spinner in CI column when CI check runs are pending', async () => {
       const { ciIcon, getSpinnerChar } = await import('../src/tui/colors.js');
       expect(ciIcon('PENDING', 2)).toBe(getSpinnerChar(2));
@@ -424,15 +447,16 @@ describe('TUI Components & Engine', () => {
         isEditingText: false,
         editBuffer: '',
         modalWidth: 80,
-        modalHeight: 16,
+        modalHeight: 24,
       });
 
-      expect(lines).toHaveLength(16);
+      expect(lines).toHaveLength(24);
       const fullText = lines.map(stripAnsi).join('\n');
       expect(fullText).toContain('Settings & Extensions');
       expect(fullText).toContain('[DEFAULTS]');
       expect(fullText).toContain('Default AI Agent');
-      expect(fullText).toContain('Poll Interval');
+      expect(fullText).toContain('Personal Poll Interval');
+      expect(fullText).toContain('Team Poll Interval');
       expect(fullText).toContain('[EXTENSIONS]');
       expect(fullText).toContain('Stream Deck Server');
       expect(fullText).toContain('[Esc to save & close]');
@@ -498,7 +522,7 @@ describe('TUI Components & Engine', () => {
       const lines = renderStatsModal({
         stats,
         scope: 'team',
-        sortBy: 'merged',
+        sortBy: 'merged30',
         teamName: 'platform-core',
         modalWidth: 100,
         modalHeight: 22,
@@ -531,9 +555,16 @@ describe('TUI Components & Engine', () => {
         isEditingText: false,
         editBuffer: '',
         modalWidth: 86,
-        modalHeight: 18,
+        modalHeight: 24,
       });
-      testModalGeometry('SettingsModal', lines, 86, 18);
+      testModalGeometry('SettingsModal', lines, 86, 24);
+      const text = lines.map(stripAnsi).join('\n');
+      expect(text).toContain('Recent Work Window');
+      expect(text).toContain('7 days (1w)');
+      expect(text).toContain('Team Open PR Max Age');
+      expect(text).toContain('30 days (1m)');
+      expect(text).toContain('Team Poll Interval');
+      expect(text).toContain('120s');
     });
 
     it('validates 6. Diff Modal frame trace', () => {

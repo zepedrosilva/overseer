@@ -304,6 +304,20 @@ describe('GraphQL Query Builder & Parser', () => {
       expect(filteredOther).toHaveLength(0);
     });
 
+    it('does not filter out team PRs when isTeamQuery is true even with filterUserOnly active', () => {
+      const teamPRResult = parseGraphQLSearchResponse(mockSearchResponse, {
+        currentUser: 'unrelateduser',
+        filterUserOnly: true,
+        isTeamQuery: true,
+        team: 'acme-corp/core-team',
+        teamMembers: ['zepedrosilva', 'otherauthor'],
+      });
+
+      expect(teamPRResult).toHaveLength(2);
+      expect(teamPRResult[0].scope).toBe('team');
+      expect(teamPRResult[1].scope).toBe('team');
+    });
+
     it('skips non-PullRequest nodes in search response', () => {
       const mixedResponse = {
         data: {
