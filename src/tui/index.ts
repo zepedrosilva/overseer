@@ -773,7 +773,7 @@ export function createTUI(
         return;
       }
 
-      const triggerBackfill = (timeframeDays: number = 90) => {
+      const triggerBackfill = (timeframeDays: number = 90, forceRefresh: boolean = false) => {
         isBackfillModalOpen = true;
         isStatsModalOpen = false;
         isHelpModalOpen = false;
@@ -782,21 +782,21 @@ export function createTUI(
         isLogsModalOpen = false;
         isDetailsModalOpen = false;
         backfillProgress = {
-          currentMember: data.currentUser || 'zepedrosilva',
+          currentMember: data.currentUser || 'user',
           memberIndex: 0,
           totalMembers: (data.teamMembers?.length || 0) + 1,
           prsFound: 0,
           totalPRs: 0,
           timeframeDays,
           status: 'starting',
-          log: [`Starting ${timeframeDays}-day PR history backfill...`],
+          log: [`Starting ${timeframeDays}-day PR history backfill${forceRefresh ? ' (force refresh)' : ' (incremental)'}...`],
         };
         render();
 
         backfillHistoricalStats(data, timeframeDays, (p) => {
           backfillProgress = p;
           render();
-        }).then(() => {
+        }, forceRefresh).then(() => {
           saveState(data);
           setTimeout(() => {
             if (isBackfillModalOpen) {
@@ -817,15 +817,19 @@ export function createTUI(
       // Handle Backfill Progress Modal Keyboard Actions
       if (isBackfillModalOpen) {
         if (key === '1') {
-          triggerBackfill(30);
+          triggerBackfill(30, false);
           return;
         }
         if (key === '2') {
-          triggerBackfill(60);
+          triggerBackfill(60, false);
           return;
         }
         if (key === '3') {
-          triggerBackfill(90);
+          triggerBackfill(90, false);
+          return;
+        }
+        if (key === 'B' || key === 'b') {
+          triggerBackfill(90, key === 'B');
           return;
         }
         if (key === '\x1b' || key === '\x0d' || key === 'q' || key === 'Q') {
@@ -893,13 +897,18 @@ export function createTUI(
           return;
         }
 
-        if (key === 'b' || key === 'B') {
-          triggerBackfill();
+        if (key === 'b') {
+          triggerBackfill(90, false);
+          return;
+        }
+
+        if (key === 'B') {
+          triggerBackfill(90, true);
           return;
         }
 
         if (key === 's' || key === 'S') { // s cycles leaderboard sort
-          const sortCriteria: LeaderboardSort[] = ['merged7', 'merged14', 'merged30', 'merged60', 'merged90', 'total', 'comments', 'stale'];
+          const sortCriteria: LeaderboardSort[] = ['merged7', 'merged14', 'merged30', 'merged60', 'merged90', 'total', 'response', 'reviews', 'comments', 'stale'];
           const idx = sortCriteria.indexOf(statsSortBy);
           statsSortBy = sortCriteria[(idx + 1) % sortCriteria.length];
           render();
@@ -1411,8 +1420,13 @@ export function createTUI(
         return;
       }
 
-      if (key === 'b' || key === 'B') { // b: Trigger On-Demand 30-day Backfill
-        triggerBackfill();
+      if (key === 'b') { // b: Trigger Incremental 90-day Backfill
+        triggerBackfill(90, false);
+        return;
+      }
+
+      if (key === 'B') { // B: Trigger Force-Refresh 90-day Backfill
+        triggerBackfill(90, true);
         return;
       }
 

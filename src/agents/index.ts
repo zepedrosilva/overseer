@@ -153,7 +153,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   };
 
   setWorker(data, pr.key, worker);
-  saveState(data);
+  saveState(data, undefined, options.cwd);
 
   // 5. Stream Output
   child.stdout?.on('data', (chunk: Buffer) => {
@@ -192,7 +192,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
       worker.status = 'failed';
       appendLog(data, pr.key, `Agent '${agentName}' exited with code ${code}`);
     }
-    saveState(data);
+    saveState(data, undefined, options.cwd);
   });
 
   child.on('error', (err) => {
@@ -203,13 +203,13 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     }
     worker.status = 'failed';
     appendLog(data, pr.key, `Agent '${agentName}' process error: ${err.message}`);
-    saveState(data);
+    saveState(data, undefined, options.cwd);
   });
 
   return worker;
 }
 
-export function cancelWorker(data: AppState, prKey: PrKey): boolean {
+export function cancelWorker(data: AppState, prKey: PrKey, cwd?: string): boolean {
   const keyStr = prKeyToString(prKey);
   const worker = data.workers.get(keyStr);
   if (!worker || worker.status !== 'running') {
@@ -230,7 +230,7 @@ export function cancelWorker(data: AppState, prKey: PrKey): boolean {
 
   worker.status = 'cancelled';
   appendLog(data, prKey, `Worker session ${worker.sessionId} cancelled`);
-  saveState(data);
+  saveState(data, undefined, cwd);
   return true;
 }
 

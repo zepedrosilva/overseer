@@ -9,6 +9,7 @@ import {
   isGHAvailable,
   isGHAuthenticated,
   getCurrentUser,
+  checkRateLimit,
 } from '../src/watcher/gh.js';
 
 vi.mock('node:child_process', () => ({
@@ -151,5 +152,40 @@ describe('GitHub CLI Wrapper Actions', () => {
     const profiles = await fetchTeamMemberProfiles(['alice', 'bob']);
     expect(profiles.alice?.name).toBe('Alice Walker');
     expect(profiles.bob?.name).toBe('Bob Dylan');
+  });
+
+  it('checks rate limits for search and graphql resources accurately', async () => {
+    vi.mocked(childProcess.execFile).mockImplementation((file, args, callback: any) => {
+      expect(file).toBe('gh');
+      expect(args).toEqual(['api', '/rate_limit']);
+      callback(null, {
+        stdout: JSON.stringify({
+          resources: {
+            core: { limit: 5000, remaining: 4900, reset: 1700000000 },
+            search: { limit: 30, remaining: 0, reset: 1700000060 },
+            graphql: { limit: 5000, remaining: 2000, reset: 1700000100 },
+          },
+        }),
+        stderr: '',
+      });
+      return {} as any;
+    });
+
+    // Auto-detects depleted search resource
+    const generic = await checkRateLimit();
+    expect(generic.isRateLimited).toBe(true);
+    expect(generic.resource).toBe('search');
+    expect(generic.remaining).toBe(0);
+    expect(generic.resetEpochMs).toBe(1700000060 * 1000);
+
+    // Explicitly check search
+    const searchRes = await checkRateLimit('search');
+    expect(searchRes.isRateLimited).toBe(true);
+    expect(searchRes.resetEpochMs).toBe(1700000060 * 1000);
+
+    // Explicitly check graphql (which is not rate limited)
+    const gqlRes = await checkRateLimit('graphql');
+    expect(gqlRes.isRateLimited).toBe(false);
+    expect(gqlRes.remaining).toBe(2000);
   });
 });

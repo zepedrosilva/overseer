@@ -44,6 +44,11 @@ This repository is monitored and maintained by Antigravity (AGY) and AI pair pro
 - **Automatic Cleanup on Merge/Close**: When a PR is merged or closed, all associated local worktrees and agent execution log files **must be deleted automatically**.
 - **Credential Hygiene**: Never write credentials, raw tokens, or secrets to disk. Rely exclusively on `gh` CLI ambient authentication.
 
+### 3.4 User Settings Preservation & Test Isolation (Strict Rule)
+- **Never Overwrite or Wipe Live User Settings**: AI agents must never delete, reset, or overwrite existing user settings (such as `team`, `defaultAgent`, `searchQuery`, or polling intervals) in `./.overseer/state.json`.
+- **Deep-Merge on Schema Updates**: Whenever new setting fields are introduced, `loadState()` and configuration loaders must preserve all existing user-configured values while applying defaults only for missing keys.
+- **Test Isolation**: Automated unit tests must always use temporary or mock state paths (e.g. dedicated temp directories or in-memory fixtures) and must never write to or mutate the live `./.overseer/state.json` file.
+
 ### 3.5 Privacy & Zero Proprietary Leakage Standards (Strict Requirement)
 - **Zero Proprietary Data in Code/Docs/Tests**: Never hardcode, commit, or reference private company/organization names, internal team slugs, internal repository names, internal URLs, or real colleague names/usernames in source code, configuration defaults, unit tests, mock fixtures, git commits, or documentation.
 - **Universal Placeholders**: Always use generic open-source identifiers for mocks, fixtures, and docs (e.g. `acme-corp`, `octocat`, `@alice`, `@bob`, `@charlie`, `web-frontend`, `api-gateway`, `backend-service`).

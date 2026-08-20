@@ -37,6 +37,7 @@ interface CliArgs {
   dryRun?: boolean;
   search?: string;
   user?: string;
+  team?: string;
   resetState?: boolean;
 }
 
@@ -73,8 +74,16 @@ function parseCliArgs(): CliArgs {
       result.dryRun = true;
     } else if (arg === '--search' && args[i + 1]) {
       result.search = args[++i];
+    } else if (arg.startsWith('--search=')) {
+      result.search = arg.split('=')[1];
+    } else if (arg === '--team' && args[i + 1]) {
+      result.team = args[++i];
+    } else if (arg.startsWith('--team=')) {
+      result.team = arg.split('=')[1];
     } else if (arg === '--user' && args[i + 1]) {
       result.user = args[++i];
+    } else if (arg.startsWith('--user=')) {
+      result.user = arg.split('=')[1];
     } else if (arg === '--reset-state') {
       result.resetState = true;
     }
@@ -100,6 +109,7 @@ async function main(): Promise<void> {
     data.dryRun = cli.dryRun;
   }
   if (cli.search !== undefined) data.settings.searchQuery = cli.search;
+  if (cli.team !== undefined) data.settings.team = cli.team;
   if (cli.user !== undefined) {
     data.settings.user = cli.user;
     data.currentUser = cli.user;
