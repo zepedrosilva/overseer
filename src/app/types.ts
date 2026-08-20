@@ -209,10 +209,22 @@ export interface HistoricalPrRecord {
   unresolvedThreadsCount: number;
   ciStatus: CiStatus;
   scope: 'mine' | 'team' | 'both';
+  reviewVerdict?: ReviewVerdict;
+  requestedReviewers?: string[];
+  approvedReviewers?: string[];
+  changesRequestedReviewers?: string[];
+}
+
+export interface MemberBackfillWatermark {
+  lastBackfilledAt: string;
+  timeframeDays: number;
+  prCount: number;
+  status: 'success' | 'rate_limited' | 'error';
 }
 
 export interface HistoricalStatsStore {
   records: HistoricalPrRecord[];
+  memberWatermarks?: Record<string, MemberBackfillWatermark>;
 }
 
 export type StatsTimeframe = '7d' | '14d' | '30d' | '60d' | '90d';
@@ -233,7 +245,17 @@ export interface MetricTrends {
   discussionDensity?: TrendDelta;
 }
 
-export type LeaderboardSort = 'merged7' | 'merged14' | 'merged30' | 'merged60' | 'merged90' | 'total' | 'comments' | 'stale';
+export type LeaderboardSort =
+  | 'merged7'
+  | 'merged14'
+  | 'merged30'
+  | 'merged60'
+  | 'merged90'
+  | 'total'
+  | 'comments'
+  | 'stale'
+  | 'response'
+  | 'reviews';
 
 export interface MemberLeaderboardEntry {
   rank: number;
@@ -249,6 +271,9 @@ export interface MemberLeaderboardEntry {
   total: number;
   discussionDensity: number;
   bottlenecksCount: number;
+  requestsReceived?: number;
+  reviewsGiven?: number;
+  responseRatePercent?: number;
 }
 
 export interface AggregatedStats {
@@ -280,6 +305,8 @@ export interface AggregatedStats {
   totalCiRuns: number;
   passedCiRuns: number;
   reviewDensityCommentsPerPR: number;
+  reviewResponseRatePercent?: number;
+  reworkRatePercent?: number;
   staleBottlenecks: Array<{
     key: PrKey;
     title: string;

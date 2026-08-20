@@ -80,10 +80,11 @@ export function renderStatsBar(
     : `\x1B[${rgbColor(colors.green)}● All Clear\x1B[0m`;
 
   const isRateLimited = Boolean(data.rateLimitedUntil && Date.now() < data.rateLimitedUntil);
+  const secsLeft = data.rateLimitedUntil ? Math.max(1, Math.ceil((data.rateLimitedUntil - Date.now()) / 1000)) : 0;
   const rateLimitResetStr = data.rateLimitedUntil ? new Date(data.rateLimitedUntil).toLocaleTimeString() : '';
 
   const pollIndicator = isRateLimited
-    ? `\x1B[${rgbColor(colors.yellow)}⚠️ Rate Limited (resets ${rateLimitResetStr})\x1B[0m`
+    ? `\x1B[${rgbColor(colors.yellow)}⚠️ Rate Limited (resets in ${secsLeft}s at ${rateLimitResetStr})\x1B[0m`
     : data.isPolling
     ? `\x1B[${rgbColor(colors.cyan)}${getSpinnerChar(options?.spinnerTick || 0)} Fetching PRs from GitHub...\x1B[0m`
     : `\x1B[${rgbColor(colors.fgDim)}Last Poll:\x1B[0m \x1B[${rgbColor(colors.fg)}${lastPolledStr}\x1B[0m`;

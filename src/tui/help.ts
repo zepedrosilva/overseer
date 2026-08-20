@@ -73,7 +73,7 @@ export function renderHelpModal(options: RenderHelpModalOptions): string[] {
   // 4. Performance & Config
   addLine(`\x1B[1;37m📊 Performance & Configuration\x1B[0m`);
   renderKeyRow('p', 'Open PR Stats & Leaderboard dashboard (7d-90d trailing metrics & trends)');
-  renderKeyRow('b / B', 'Trigger on-demand PR stats backfill (defaults to 90d)');
+  renderKeyRow('b / B', 'Trigger PR backfill: [b] incremental (cached)  [B] force refresh');
   renderKeyRow('s', 'Settings & Extensions modal (team, default agent, Local API)');
   renderKeyRow('? / h', 'Show this All Actions & Keybindings modal');
   renderKeyRow('q', 'Quit Overseer');

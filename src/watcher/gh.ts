@@ -97,28 +97,87 @@ function executeGraphQL<T = Record<string, unknown>>(
   });
 }
 
+export type GitHubResource = 'graphql' | 'search' | 'core';
+
 export interface RateLimitInfo {
   isRateLimited: boolean;
   resetEpochMs?: number;
   remaining?: number;
   limit?: number;
+  resource?: GitHubResource;
 }
 
-export async function checkRateLimit(): Promise<RateLimitInfo> {
+export async function checkRateLimit(resource?: GitHubResource): Promise<RateLimitInfo> {
   try {
     const { stdout } = await execFileAsync('gh', ['api', '/rate_limit']);
-    const parsed = JSON.parse(stdout) as Record<string, { graphql?: { limit?: number; remaining?: number; reset?: number } }>;
-    const graphql = parsed?.resources?.graphql;
-    if (graphql && typeof graphql.remaining === 'number') {
-      const isRateLimited = graphql.remaining <= 0;
-      const resetEpochMs = typeof graphql.reset === 'number' ? graphql.reset * 1000 : undefined;
+    const parsed = JSON.parse(stdout) as {
+      resources?: {
+        graphql?: { limit?: number; remaining?: number; reset?: number };
+        search?: { limit?: number; remaining?: number; reset?: number };
+        core?: { limit?: number; remaining?: number; reset?: number };
+      };
+    };
+
+    const resources = parsed?.resources;
+    if (!resources) {
+      return { isRateLimited: false };
+    }
+
+    if (resource) {
+      const res = resources[resource];
+      if (res && typeof res.remaining === 'number') {
+        return {
+          isRateLimited: res.remaining <= 0,
+          resetEpochMs: typeof res.reset === 'number' ? res.reset * 1000 : undefined,
+          remaining: res.remaining,
+          limit: res.limit,
+          resource,
+        };
+      }
+    }
+
+    // If no specific resource requested, check if any resource is depleted
+    const search = resources.search;
+    const graphql = resources.graphql;
+    const core = resources.core;
+
+    if (search && typeof search.remaining === 'number' && search.remaining <= 0) {
       return {
-        isRateLimited,
-        resetEpochMs,
-        remaining: graphql.remaining,
-        limit: graphql.limit,
+        isRateLimited: true,
+        resetEpochMs: typeof search.reset === 'number' ? search.reset * 1000 : undefined,
+        remaining: search.remaining,
+        limit: search.limit,
+        resource: 'search',
       };
     }
+
+    if (graphql && typeof graphql.remaining === 'number' && graphql.remaining <= 0) {
+      return {
+        isRateLimited: true,
+        resetEpochMs: typeof graphql.reset === 'number' ? graphql.reset * 1000 : undefined,
+        remaining: graphql.remaining,
+        limit: graphql.limit,
+        resource: 'graphql',
+      };
+    }
+
+    if (core && typeof core.remaining === 'number' && core.remaining <= 0) {
+      return {
+        isRateLimited: true,
+        resetEpochMs: typeof core.reset === 'number' ? core.reset * 1000 : undefined,
+        remaining: core.remaining,
+        limit: core.limit,
+        resource: 'core',
+      };
+    }
+
+    return {
+      isRateLimited: false,
+      resetEpochMs: typeof graphql?.reset === 'number' ? graphql.reset * 1000 : undefined,
+      remaining: graphql?.remaining,
+      limit: graphql?.limit,
+      resource: 'graphql',
+    };
   } catch {
     // Non-critical fallback
   }

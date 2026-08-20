@@ -161,6 +161,14 @@ describe('TUI Components & Engine', () => {
       const stats = renderStatsBar(state, 120, { spinnerTick: 2 });
       expect(stripAnsi(stats)).toContain('Fetching PRs from GitHub');
     });
+
+    it('renders rate limit countdown in stats bar when rate limited', () => {
+      const state = createEmptyState();
+      state.rateLimitedUntil = Date.now() + 45 * 1000;
+
+      const stats = renderStatsBar(state, 120);
+      expect(stripAnsi(stats)).toContain('⚠️ Rate Limited (resets in');
+    });
   });
 
   describe('Table & Details Views', () => {

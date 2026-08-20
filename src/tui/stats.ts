@@ -77,52 +77,128 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     total: 'Total PRs',
     comments: 'Discussion Density',
     stale: 'Stale Bottlenecks',
+    response: 'Review Response Rate',
+    reviews: 'Reviews Given',
   };
   const sortLabel = sortNames[sortBy];
 
   const scopeTabs = `Scope: \x1B[${rgbColor(colors.fgDim)}[Tab/t]\x1B[0m ${mineDot} ${mineText}  ${teamDot} ${teamText}`;
-  const tfTabs = `    Timeframe: \x1B[${rgbColor(colors.fgDim)}[1-5/w]\x1B[0m ${tfBadges}`;
+  const tfTabs = `Timeframe: \x1B[${rgbColor(colors.fgDim)}[1-5/w]\x1B[0m ${tfBadges}`;
   const sortTabs = isTeam
     ? `    Sort: \x1B[${rgbColor(colors.fgDim)}[s]\x1B[0m \x1B[1;37m● ${sortLabel}\x1B[0m`
     : '';
 
-  addLine(`${scopeTabs}${tfTabs}${sortTabs}`);
+  addLine(scopeTabs);
+  addLine(`${tfTabs}${sortTabs}`);
   addDivider();
 
-  // 3. Code Volume & Low-Level Metrics
+  // 3. High-Contrast 2x3 KPI Metric Cards
   const addStr = `\x1B[${rgbColor(colors.green)}+${stats.totalAdditions.toLocaleString()}\x1B[0m`;
   const delStr = `\x1B[${rgbColor(colors.red)}-${stats.totalDeletions.toLocaleString()}\x1B[0m`;
-  const sizeDist = `${stats.sizeDistribution.smallPercent}% S (<100L)  │  ${stats.sizeDistribution.mediumPercent}% M (100-500L)  │  ${stats.sizeDistribution.largePercent}% L (>500L)`;
 
-  const m7Str = `\x1B[1;37m${stats.mergedPRs7 ?? 0}\x1B[0m (7d)`;
-  const m14Str = `\x1B[1;37m${stats.mergedPRs14 ?? 0}\x1B[0m (14d)`;
-  const m30Str = `\x1B[1;37m${stats.mergedPRs30 ?? stats.mergedPRs}\x1B[0m (30d)`;
-  const m60Str = `\x1B[1;37m${stats.mergedPRs60 ?? stats.mergedPRs}\x1B[0m (60d)`;
-  const m90Str = `\x1B[1;37m${stats.mergedPRs90 ?? stats.mergedPRs}\x1B[0m (90d)`;
-
-  addLine(`\x1B[1;37m📦 Code Volume & Merged PR History\x1B[0m`);
-  addLine(`  • Merged PRs:  ${m7Str} │ ${m14Str} │ ${m30Str} │ ${m60Str} │ ${m90Str}  (${stats.openPRs} open, ${stats.closedPRs} closed)  │  Avg Size: \x1B[1;37m${stats.avgPRSize}L\x1B[0m`);
-  addLine(`  • Code Diff:   ${addStr} / ${delStr}  │  Files: \x1B[1;37m${stats.totalChangedFiles}\x1B[0m  │  Commits: \x1B[1;37m${stats.totalCommits}\x1B[0m (${stats.avgCommitsPerPR}/PR)`);
-  addLine(`  • PR Tiers:    \x1B[${rgbColor(colors.fgDim)}${sizeDist}\x1B[0m`);
-  addDivider();
-
-  // 4. Velocity & Review Turnaround
   const reviewTimeStr = stats.medianTimeToFirstReviewHours !== null
-    ? `\x1B[1;37m${stats.medianTimeToFirstReviewHours}h\x1B[0m`
+    ? `\x1B[1;37m${stats.medianTimeToFirstReviewHours} hrs\x1B[0m`
     : `\x1B[${rgbColor(colors.fgDim)}N/A\x1B[0m`;
 
   const mergeTimeStr = stats.medianTimeToMergeDays !== null
-    ? `\x1B[1;37m${stats.medianTimeToMergeDays}d\x1B[0m`
+    ? `\x1B[1;37m${stats.medianTimeToMergeDays} days\x1B[0m`
     : `\x1B[${rgbColor(colors.fgDim)}N/A\x1B[0m`;
 
   const ciColor = stats.ciPassRatePercent >= 90 ? rgbColor(colors.green) : stats.ciPassRatePercent >= 75 ? rgbColor(colors.yellow) : rgbColor(colors.red);
-  const ciStr = `\x1B[${ciColor}${stats.ciPassRatePercent}%\x1B[0m \x1B[${rgbColor(colors.fgDim)}(${stats.passedCiRuns}/${stats.totalCiRuns} runs)\x1B[0m`;
+  const respRate = stats.reviewResponseRatePercent ?? 100;
+  const respColor = respRate >= 80 ? rgbColor(colors.green) : respRate >= 60 ? rgbColor(colors.yellow) : rgbColor(colors.red);
 
-  addLine(`\x1B[1;37m⏱️ Velocity & Review Turnaround (${currentTimeframe} trailing)\x1B[0m`);
-  addLine(`  • Median Time to First Review: ${reviewTimeStr}      • Median Time to Merge: ${mergeTimeStr}`);
-  addLine(`  • CI Pass Rate:                ${ciStr}   • Discussion Density:   \x1B[1;37m${stats.reviewDensityCommentsPerPR}\x1B[0m cmts/PR`);
+  interface MetricCard {
+    title: string;
+    line1: string;
+    line2: string;
+  }
 
-  // 5. Stack-Ranked Leaderboard Section (in Team View)
+  const renderCardRow = (cards: MetricCard[]) => {
+    const cardCount = cards.length;
+    const totalGap = (cardCount - 1) * 2;
+    const cardWidth = Math.max(16, Math.floor((innerWidth - totalGap) / cardCount));
+
+    const topParts: string[] = [];
+    const l1Parts: string[] = [];
+    const l2Parts: string[] = [];
+    const botParts: string[] = [];
+
+    for (let i = 0; i < cardCount; i++) {
+      const c = cards[i];
+      const tStr = ` ${c.title} `;
+      const dashCount = Math.max(0, cardWidth - visualLength(tStr) - 3);
+      const top = `\x1B[${rgbColor(colors.cyan)}┌─\x1B[1;37m${tStr}\x1B[0m\x1B[${rgbColor(colors.cyan)}${'─'.repeat(dashCount)}┐\x1B[0m`;
+      topParts.push(padEndVisual(top, cardWidth));
+
+      const l1Inner = truncateVisual(c.line1, cardWidth - 4);
+      const l1 = `\x1B[${rgbColor(colors.cyan)}│\x1B[0m ${padEndVisual(l1Inner, cardWidth - 4)} \x1B[${rgbColor(colors.cyan)}│\x1B[0m`;
+      l1Parts.push(padEndVisual(l1, cardWidth));
+
+      const l2Inner = truncateVisual(c.line2, cardWidth - 4);
+      const l2 = `\x1B[${rgbColor(colors.cyan)}│\x1B[0m ${padEndVisual(l2Inner, cardWidth - 4)} \x1B[${rgbColor(colors.cyan)}│\x1B[0m`;
+      l2Parts.push(padEndVisual(l2, cardWidth));
+
+      const bot = `\x1B[${rgbColor(colors.cyan)}└${'─'.repeat(Math.max(0, cardWidth - 2))}┘\x1B[0m`;
+      botParts.push(padEndVisual(bot, cardWidth));
+    }
+
+    addLine(topParts.join('  '));
+    addLine(l1Parts.join('  '));
+    addLine(l2Parts.join('  '));
+    addLine(botParts.join('  '));
+  };
+
+  // Card Row 1
+  renderCardRow([
+    {
+      title: 'MERGE VELOCITY',
+      line1: `\x1B[1;37m${mergeTimeStr}\x1B[0m \x1B[${rgbColor(colors.fgDim)}median merge\x1B[0m`,
+      line2: `\x1B[${rgbColor(colors.green)}${stats.mergedPRs} merged PRs\x1B[0m · \x1B[${rgbColor(colors.fgDim)}${stats.openPRs} open\x1B[0m`,
+    },
+    {
+      title: '1ST REVIEW SPEED',
+      line1: `\x1B[1;37m${reviewTimeStr}\x1B[0m \x1B[${rgbColor(colors.fgDim)}to 1st review\x1B[0m`,
+      line2: `\x1B[${rgbColor(colors.fgDim)}${stats.reviewDensityCommentsPerPR} comments/PR\x1B[0m`,
+    },
+    {
+      title: 'REVIEW RESPONSE',
+      line1: `\x1B[${respColor}${respRate}%\x1B[0m \x1B[${rgbColor(colors.fgDim)}response rate\x1B[0m`,
+      line2: `\x1B[${rgbColor(colors.fgDim)}${stats.reworkRatePercent ?? 0}% rework (changes req)\x1B[0m`,
+    },
+  ]);
+
+  // Card Row 2
+  renderCardRow([
+    {
+      title: 'CI PASS HEALTH',
+      line1: `\x1B[${ciColor}${stats.ciPassRatePercent}%\x1B[0m \x1B[${rgbColor(colors.fgDim)}pass rate\x1B[0m`,
+      line2: `\x1B[${rgbColor(colors.fgDim)}${stats.passedCiRuns}/${stats.totalCiRuns} runs passed\x1B[0m`,
+    },
+    {
+      title: 'CODE DIFF & VOLUME',
+      line1: `${addStr} / ${delStr} \x1B[${rgbColor(colors.fgDim)}lines\x1B[0m`,
+      line2: `\x1B[${rgbColor(colors.fgDim)}Avg: \x1B[1;37m${stats.avgPRSize} lines/PR\x1B[0m\x1B[${rgbColor(colors.fgDim)} (${stats.totalChangedFiles} files)\x1B[0m`,
+    },
+    {
+      title: 'MERGED VELOCITY',
+      line1: `\x1B[1;37m${stats.mergedPRs7 ?? 0}\x1B[0m \x1B[${rgbColor(colors.fgDim)}PRs (7d) ·\x1B[0m \x1B[1;37m${stats.mergedPRs30 ?? stats.mergedPRs}\x1B[0m \x1B[${rgbColor(colors.fgDim)}(30d) ·\x1B[0m \x1B[1;37m${stats.mergedPRs90 ?? stats.mergedPRs}\x1B[0m \x1B[${rgbColor(colors.fgDim)}(90d)\x1B[0m`,
+      line2: `\x1B[${rgbColor(colors.fgDim)}${stats.totalCommits} commits (${stats.avgCommitsPerPR} commits/PR)\x1B[0m`,
+    },
+  ]);
+
+  // Visual PR Sizing Distribution Bar
+  const sBlocks = Math.max(1, Math.round((stats.sizeDistribution.smallPercent / 100) * 8));
+  const mBlocks = Math.max(1, Math.round((stats.sizeDistribution.mediumPercent / 100) * 8));
+  const lBlocks = Math.max(1, Math.round((stats.sizeDistribution.largePercent / 100) * 8));
+
+  const sBar = `\x1B[${rgbColor(colors.green)}${'█'.repeat(sBlocks)}\x1B[0m \x1B[1;37m${stats.sizeDistribution.smallPercent}%\x1B[0m \x1B[${rgbColor(colors.fgDim)}S (<100 lines)\x1B[0m`;
+  const mBar = `\x1B[${rgbColor(colors.cyan)}${'█'.repeat(mBlocks)}\x1B[0m \x1B[1;37m${stats.sizeDistribution.mediumPercent}%\x1B[0m \x1B[${rgbColor(colors.fgDim)}M (100-500 lines)\x1B[0m`;
+  const lBar = `\x1B[${rgbColor(colors.yellow)}${'█'.repeat(lBlocks)}\x1B[0m \x1B[1;37m${stats.sizeDistribution.largePercent}%\x1B[0m \x1B[${rgbColor(colors.fgDim)}L (>500 lines)\x1B[0m`;
+
+  addLine(`  \x1B[1;37mPR Sizing:\x1B[0m  ${sBar}    ${mBar}    ${lBar}`);
+
+  // 4. Stack-Ranked Leaderboard Section (in Team View)
   if (scope === 'team') {
     addDivider();
     if (!teamName || teamName.trim() === '') {
@@ -131,9 +207,9 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
       addLine(`\x1B[1;37m👥 Team Member Leaderboard (Ranked by ${sortLabel})\x1B[0m`);
 
       // Dynamic Member column width tailored to modal inner width
-      const numColsWidth = 5 + 5 + 5 + 5 + 5 + 5 + 6 + 6 + 8 + 6; // 56 chars
-      const memberColWidth = Math.max(24, Math.min(32, innerWidth - numColsWidth));
-      const maxNameLen = Math.max(12, memberColWidth - 6);
+      const numColsWidth = 5 + 5 + 5 + 5 + 5 + 5 + 6 + 6 + 6 + 7 + 6; // 61 chars
+      const memberColWidth = Math.max(20, Math.min(30, innerWidth - numColsWidth));
+      const maxNameLen = Math.max(10, memberColWidth - 6);
 
       // Column Header for member table with exact numerical columns
       const mHead = `  RANK  MEMBER`.padEnd(memberColWidth) +
@@ -143,9 +219,10 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
         `60d`.padStart(5) +
         `90d`.padStart(5) +
         `OPEN`.padStart(5) +
-        `CLOSED`.padStart(6) +
         `TOTAL`.padStart(6) +
-        `CMTS/PR`.padStart(8) +
+        `REQ`.padStart(6) +
+        `REV`.padStart(6) +
+        `RESP%`.padStart(7) +
         `STALE`.padStart(6);
       addLine(`\x1B[${rgbColor(colors.fgDim)}${mHead}\x1B[0m`);
 
@@ -164,20 +241,23 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
         const m60Col = String(m.merged60 ?? 0).padStart(5);
         const m90Col = String(m.merged90 ?? 0).padStart(5);
         const openCol = String(m.open ?? 0).padStart(5);
-        const closedCol = String(m.closed ?? 0).padStart(6);
         const totalCol = String(m.total ?? 0).padStart(6);
-        const cmtsCol = `${m.discussionDensity}`.padStart(8);
+        const reqCol = String(m.requestsReceived ?? 0).padStart(6);
+        const revCol = String(m.reviewsGiven ?? 0).padStart(6);
+        const respCol = `${m.responseRatePercent ?? 100}%`.padStart(7);
         const staleStr = m.bottlenecksCount > 0
           ? `\x1B[${rgbColor(colors.yellow)}${String(m.bottlenecksCount).padStart(6)}\x1B[0m`
           : String(0).padStart(6);
 
-        const mLine = `${memberCol}\x1B[${rgbColor(colors.green)}${m7Col}\x1B[0m\x1B[${rgbColor(colors.green)}${m14Col}\x1B[0m\x1B[${rgbColor(colors.cyan)}${m30Col}\x1B[0m\x1B[${rgbColor(colors.blue)}${m60Col}\x1B[0m\x1B[${rgbColor(colors.magenta)}${m90Col}\x1B[0m\x1B[1;37m${openCol}\x1B[0m\x1B[${rgbColor(colors.fgDim)}${closedCol}\x1B[0m\x1B[1;37m${totalCol}\x1B[0m${cmtsCol}${staleStr}`;
+        const mRespColor = (m.responseRatePercent ?? 100) >= 80 ? colors.green : (m.responseRatePercent ?? 100) >= 60 ? colors.yellow : colors.red;
+
+        const mLine = `${memberCol}\x1B[${rgbColor(colors.green)}${m7Col}\x1B[0m\x1B[${rgbColor(colors.green)}${m14Col}\x1B[0m\x1B[${rgbColor(colors.cyan)}${m30Col}\x1B[0m\x1B[${rgbColor(colors.blue)}${m60Col}\x1B[0m\x1B[${rgbColor(colors.magenta)}${m90Col}\x1B[0m\x1B[1;37m${openCol}\x1B[0m\x1B[1;37m${totalCol}\x1B[0m\x1B[${rgbColor(colors.fgDim)}${reqCol}\x1B[0m\x1B[${rgbColor(colors.cyan)}${revCol}\x1B[0m\x1B[${rgbColor(mRespColor)}${respCol}\x1B[0m${staleStr}`;
         addLine(mLine);
       }
     }
   }
 
-  // 6. Bottlenecks Section
+  // 5. Bottlenecks Section
   if (stats.staleBottlenecks.length > 0) {
     addDivider();
     addLine(`\x1B[${rgbColor(colors.yellow)}⚠️ Bottlenecks Requiring Attention (>3d pending)\x1B[0m`);
@@ -188,12 +268,16 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     }
   }
 
-  // Fill empty space up to modalHeight - 1
-  while (outputLines.length < modalHeight - 1) {
-    addLine('');
+  // Fill empty space up to modalHeight - 1 or slice if too tall
+  if (outputLines.length > modalHeight - 1) {
+    outputLines.length = modalHeight - 1;
+  } else {
+    while (outputLines.length < modalHeight - 1) {
+      addLine('');
+    }
   }
 
-  // 7. Bottom Border
+  // 6. Bottom Border
   const footerHelp = ` [1-5/w] timeframe  [Tab] scope  [s] sort  [b] backfill  [Esc/p] close `;
   const botDash = Math.max(0, modalWidth - visualLength(footerHelp) - 4);
   const botBorder = `\x1B[${rgbColor(colors.cyan)}└─\x1B[${rgbColor(colors.fgDim)}${footerHelp}\x1B[0m\x1B[${rgbColor(colors.cyan)}${'─'.repeat(botDash)}─┘\x1B[0m`;
