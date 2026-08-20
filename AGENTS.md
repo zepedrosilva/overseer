@@ -54,6 +54,12 @@ This repository is monitored and maintained by Antigravity (AGY) and AI pair pro
 - **Universal Placeholders**: Always use generic open-source identifiers for mocks, fixtures, and docs (e.g. `acme-corp`, `octocat`, `@alice`, `@bob`, `@charlie`, `web-frontend`, `api-gateway`, `backend-service`).
 - **Zero Default Org Slugs**: `DEFAULT_SETTINGS.team` must always default to an empty string (`team: ''`), allowing users to configure their own team via Settings (<kbd>s</kbd>) or CLI flags.
 
+### 3.6 Public Repository & Packaging Integrity
+- **CLI Binary Hashbang**: `src/main.ts` must always retain `#!/usr/bin/env node` at line 1 so compiled `dist/main.js` runs as an executable CLI binary.
+- **Package Metadata Preservation**: Never remove or corrupt `package.json` distribution fields (`bin`, `files`, `engines`, `repository`, `homepage`, `bugs`, `keywords`, `license`).
+- **Security & Community Files**: Never delete or weaken open-source standards (`LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, `.github/dependabot.yml`, and PR/Issue templates).
+- **Least-Privilege Workflows**: All GitHub Actions workflows must explicitly declare minimal permissions (`permissions: contents: read`) to maintain fork safety.
+
 ---
 
 ## 4. Useful Commands
