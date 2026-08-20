@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { AppState, AppConfig, RepoHandle, PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
-import { runGraphQL, fetchTeamMembers } from './gh.js';
+import { runGraphQL, fetchTeamMembers, fetchTeamMemberProfiles, checkRateLimit } from './gh.js';
 import {
   buildBatchPRQuery,
   parseGraphQLBatchResponse,
@@ -39,18 +39,26 @@ function logWatcherMessage(message: string): void {
   }
 }
 
+interface FetchSearchResult {
+  prs: PrState[];
+  error?: Error;
+  isRateLimit?: boolean;
+}
+
 async function fetchSearchPrs(
   searchQuery: string,
   options?: ParseGraphQLBatchOptions,
   defaultAgent?: string
-): Promise<PrState[]> {
+): Promise<FetchSearchResult> {
   try {
     const query = buildSearchPRQuery(searchQuery, 50);
     const rawResponse = await runGraphQL<Record<string, unknown>>(query);
-    return parseGraphQLSearchResponse(rawResponse, options, defaultAgent);
+    const prs = parseGraphQLSearchResponse(rawResponse, options, defaultAgent);
+    return { prs };
   } catch (err) {
+    const isRateLimit = Boolean((err as Record<string, unknown>).isRateLimit || /rate limit|RATE_LIMITED/i.test((err as Error).message));
     logWatcherMessage(`Search query [${searchQuery}] failed: ${(err as Error).message}`);
-    return [];
+    return { prs: [], error: err as Error, isRateLimit };
   }
 }
 
@@ -89,8 +97,18 @@ async function fetchChunkPrs(
 
 export async function pollAllRepos(
   data: AppState,
-  config: AppConfig
+  config: AppConfig,
+  scope: 'all' | 'mine' | 'team' = 'all'
 ): Promise<void> {
+  // 1. Check if we are currently rate-limited by GitHub API
+  if (data.rateLimitedUntil) {
+    if (Date.now() < data.rateLimitedUntil) {
+      data.isPolling = false;
+      return;
+    }
+    data.rateLimitedUntil = undefined;
+  }
+
   data.isPolling = true;
 
   const filterOptions: ParseGraphQLBatchOptions = {
@@ -100,78 +118,116 @@ export async function pollAllRepos(
 
   const seenPrKeys = new Set<string>();
   const isSearchMode = Boolean(config.defaults.search_query) || config.repos.length === 0;
+  let hasFetchErrors = false;
+  let isRateLimited = false;
 
   try {
     if (isSearchMode) {
       const user = data.currentUser || config.defaults?.user;
       const teamSlug = data.settings?.team || config.defaults?.team;
+      const recentWindowDays = data.settings?.recentPrWindowDays ?? config.defaults?.recent_pr_window_days ?? 7;
+      const cutoffDate = new Date(Date.now() - recentWindowDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-      // 1. Personal Query
-      const queryStr = config.defaults.search_query
-        || (user && user !== 'unknown' ? `is:pr is:open involves:${user}` : 'is:pr is:open involves:@me');
-
-      const parsedPrs = await fetchSearchPrs(queryStr, filterOptions, config.defaults.agent);
       const stagedPrs = new Map<string, PrState>();
       const discoveredRepos = new Map<string, RepoHandle>();
 
-      for (const pr of parsedPrs) {
-        const keyStr = prKeyToString(pr.key);
-        stagedPrs.set(keyStr, pr);
+      // 1. Personal Queries (Active open PRs + recently completed PRs within window)
+      if (scope === 'all' || scope === 'mine') {
+        const personalQueries: string[] = [];
+        if (config.defaults.search_query) {
+          personalQueries.push(config.defaults.search_query);
+        } else {
+          const userTerm = user && user !== 'unknown' ? `involves:${user}` : 'involves:@me';
+          personalQueries.push(`is:pr is:open ${userTerm}`);
+          personalQueries.push(`is:pr is:closed closed:>=${cutoffDate} ${userTerm}`);
+        }
 
-        const repoKey = `${pr.key.owner.toLowerCase()}/${pr.key.repo.toLowerCase()}`;
-        if (!discoveredRepos.has(repoKey)) {
-          discoveredRepos.set(repoKey, {
-            owner: pr.key.owner,
-            repo: pr.key.repo,
-            url: `https://github.com/${pr.key.owner}/${pr.key.repo}`,
-            agent: config.defaults.agent,
-          });
+        const personalFetchResults = await Promise.all(
+          personalQueries.map((q) => fetchSearchPrs(q, filterOptions, config.defaults.agent))
+        );
+
+        for (const res of personalFetchResults) {
+          if (res.error) {
+            hasFetchErrors = true;
+            if (res.isRateLimit) isRateLimited = true;
+          }
+          for (const pr of res.prs) {
+            const keyStr = prKeyToString(pr.key);
+            stagedPrs.set(keyStr, pr);
+
+            const repoKey = `${pr.key.owner.toLowerCase()}/${pr.key.repo.toLowerCase()}`;
+            if (!discoveredRepos.has(repoKey)) {
+              discoveredRepos.set(repoKey, {
+                owner: pr.key.owner,
+                repo: pr.key.repo,
+                url: `https://github.com/${pr.key.owner}/${pr.key.repo}`,
+                agent: config.defaults.agent,
+              });
+            }
+          }
         }
       }
 
-      // 2. Team Query (if team slug/members configured)
-      if (teamSlug) {
+      // 2. Team Queries (Active open PRs + recently completed PRs within window)
+      if ((scope === 'all' || scope === 'team') && teamSlug) {
         if (!data.teamMembers || data.teamMembers.length === 0) {
           const fetched = await fetchTeamMembers(teamSlug);
           if (fetched.length > 0) {
             data.teamMembers = fetched;
+            try {
+              const profiles = await fetchTeamMemberProfiles(data.teamMembers);
+              data.teamProfiles = {
+                ...(data.teamProfiles || {}),
+                ...profiles,
+              };
+            } catch {
+              // Non-critical
+            }
           }
         }
 
         const teamFilterOpts: ParseGraphQLBatchOptions = {
           ...filterOptions,
           team: teamSlug,
+          teamMembers: data.teamMembers,
           isTeamQuery: true,
         };
-        const teamQuery = teamSlug.includes('/') ? `is:pr is:open team:${teamSlug}` : `is:pr is:open ${teamSlug}`;
 
-        // Also query PRs for team members (combined into chunked search queries for high throughput)
-        const memberLogins = (data.teamMembers || []).filter(
-          (m) => m.toLowerCase() !== (data.currentUser || '').toLowerCase()
-        );
+        const teamQueries: string[] = [];
+        const allTeamMembers = data.teamMembers || [];
+        const teamActiveDays = data.settings?.teamActiveWindowDays ?? config.defaults?.team_active_window_days ?? 30;
+        const activeCutoffDate = teamActiveDays > 0
+          ? new Date(Date.now() - teamActiveDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+          : '';
+        const isInitialPoll = data.lastPolled === undefined;
+        const shouldQueryClosed = scope === 'all' || isInitialPoll;
 
-        const memberQueries: string[] = [];
-        if (memberLogins.length > 0) {
-          // Batch up to 12 members per involves: query
-          for (let i = 0; i < memberLogins.length; i += 12) {
-            const chunk = memberLogins.slice(i, i + 12);
-            const chunkQuery = `is:pr is:open ${chunk.map((m) => `involves:${m}`).join(' ')}`;
-            memberQueries.push(chunkQuery);
+        // Query PRs strictly authored by each team member (active open + recently completed when full poll)
+        for (const member of allTeamMembers) {
+          const openQuery = activeCutoffDate
+            ? `is:pr is:open author:${member} updated:>=${activeCutoffDate}`
+            : `is:pr is:open author:${member}`;
+          teamQueries.push(openQuery);
+          if (shouldQueryClosed) {
+            teamQueries.push(`is:pr is:closed closed:>=${cutoffDate} author:${member}`);
           }
         }
 
-        // Fetch team query and member chunk queries concurrently in parallel
-        const allTeamFetchPromises = [
-          fetchSearchPrs(teamQuery, teamFilterOpts, config.defaults.agent),
-          ...memberQueries.map((q) => fetchSearchPrs(q, teamFilterOpts, config.defaults.agent)),
-        ];
+        // Fetch team member author queries concurrently in parallel
+        const allTeamFetchPromises = teamQueries.map((q) =>
+          fetchSearchPrs(q, teamFilterOpts, config.defaults.agent)
+        );
 
         const fetchResults = await Promise.all(allTeamFetchPromises);
         const teamPrs: PrState[] = [];
         const seenTeamKeys = new Set<string>();
 
-        for (const batch of fetchResults) {
-          for (const pr of batch) {
+        for (const res of fetchResults) {
+          if (res.error) {
+            hasFetchErrors = true;
+            if (res.isRateLimit) isRateLimited = true;
+          }
+          for (const pr of res.prs) {
             const keyStr = prKeyToString(pr.key);
             if (!seenTeamKeys.has(keyStr)) {
               seenTeamKeys.add(keyStr);
@@ -204,6 +260,16 @@ export async function pollAllRepos(
         }
       }
 
+      // If rate limited, record until timestamp
+      if (isRateLimited) {
+        try {
+          const rateInfo = await checkRateLimit();
+          data.rateLimitedUntil = rateInfo.resetEpochMs || (Date.now() + 15 * 60 * 1000);
+        } catch {
+          data.rateLimitedUntil = Date.now() + 15 * 60 * 1000;
+        }
+      }
+
       // 3. Atomically apply all staged PRs to state after successful fetches
       for (const [keyStr, pr] of stagedPrs.entries()) {
         seenPrKeys.add(keyStr);
@@ -211,9 +277,16 @@ export async function pollAllRepos(
         const existing = data.prs.get(keyStr);
         const previousStatus = existing?.overallStatus;
 
+        let finalScope = pr.scope;
+        if (scope === 'mine' && existing && (existing.scope === 'team' || existing.scope === 'both')) {
+          finalScope = 'both';
+        } else if (scope === 'team' && existing && (existing.scope === 'mine' || existing.scope === 'both')) {
+          finalScope = 'both';
+        }
+
         const mergedPR: PrState = {
           ...pr,
-          scope: existing?.scope === 'mine' && pr.scope === 'team' ? 'both' : pr.scope,
+          scope: finalScope,
           agent: existing?.agent || pr.agent || config.defaults.agent,
           log: existing?.log || [],
           logOffset: existing?.logOffset || 0,
@@ -238,15 +311,38 @@ export async function pollAllRepos(
       }
 
       // If repos were not explicitly configured in config.toml, update data.repos dynamically
-      if (config.repos.length === 0) {
-        data.repos = Array.from(discoveredRepos.values());
+      if (config.repos.length === 0 && discoveredRepos.size > 0) {
+        const currentRepoMap = new Map(data.repos.map((r) => [`${r.owner.toLowerCase()}/${r.repo.toLowerCase()}`, r]));
+        for (const [k, r] of discoveredRepos) {
+          currentRepoMap.set(k, r);
+        }
+        data.repos = Array.from(currentRepoMap.values());
       }
 
-      // Detect PRs that are no longer open and prune from active triage list
-      for (const [keyStr, pr] of data.prs.entries()) {
-        if (!seenPrKeys.has(keyStr)) {
-          recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
-          data.prs.delete(keyStr);
+      // Detect PRs that are no longer in active scope and prune from table
+      // CRITICAL: Only prune if fetches for this scope completed without any errors!
+      if (!hasFetchErrors && seenPrKeys.size > 0) {
+        for (const [keyStr, pr] of data.prs.entries()) {
+          if (!seenPrKeys.has(keyStr)) {
+            if (scope === 'mine') {
+              if (pr.scope === 'mine') {
+                recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+                data.prs.delete(keyStr);
+              } else if (pr.scope === 'both') {
+                pr.scope = 'team';
+              }
+            } else if (scope === 'team') {
+              if (pr.scope === 'team') {
+                recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+                data.prs.delete(keyStr);
+              } else if (pr.scope === 'both') {
+                pr.scope = 'mine';
+              }
+            } else {
+              recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
+              data.prs.delete(keyStr);
+            }
+          }
         }
       }
     } else {

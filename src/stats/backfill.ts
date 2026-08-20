@@ -190,8 +190,14 @@ export async function backfillHistoricalStats(
         }
 
         logLines.push(`  ✔ ${displayName}: ${memberPrCount} PRs found in last ${timeframeDays}d`);
-      } catch {
-        logLines.push(`  ✖ ${displayName}: query failed or timed out`);
+      } catch (err) {
+        const errMsg = (err as Error).message || '';
+        if (/rate limit|RATE_LIMITED/i.test(errMsg)) {
+          logLines.push(`  ⚠️ Rate limit reached for ${displayName}`);
+          data.rateLimitedUntil = Date.now() + 15 * 60 * 1000;
+        } else {
+          logLines.push(`  ✖ ${displayName}: query failed or timed out`);
+        }
       } finally {
         completedCount++;
         emitProgress(displayName, completedCount, authorsToQuery.length, 0, totalBackfilled, 'in_progress');
@@ -201,11 +207,13 @@ export async function backfillHistoricalStats(
 
   await Promise.all(workers);
 
-  // Filter out any stale records older than requested timeframe
-  data.historicalStats.records = Array.from(existingMap.values()).filter((r) => {
-    const time = new Date(r.createdAt).getTime();
-    return !isNaN(time) && time >= cutoffMs;
-  });
+  // Filter out any stale records older than requested timeframe only if new records were found or empty
+  if (totalBackfilled > 0 || data.historicalStats.records.length === 0) {
+    data.historicalStats.records = Array.from(existingMap.values()).filter((r) => {
+      const time = new Date(r.createdAt).getTime();
+      return !isNaN(time) && time >= cutoffMs;
+    });
+  }
 
   saveState(data);
 

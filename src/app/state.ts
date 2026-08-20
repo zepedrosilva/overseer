@@ -44,6 +44,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchQuery: '',
   dryRun: false,
   team: '',
+  recentPrWindowDays: 7,
+  teamActiveWindowDays: 30,
+  teamPollIntervalSecs: 120,
 };
 
 export const DEFAULT_EXTENSIONS: AppExtensions = {
@@ -108,6 +111,7 @@ export function saveState(data: AppState, customPath?: string, cwd: string = pro
     dryRun: data.dryRun || data.settings?.dryRun || false,
     lastPolled: data.lastPolled,
     currentUser: data.currentUser,
+    rateLimitedUntil: data.rateLimitedUntil,
   };
 
   fs.writeFileSync(filePath, JSON.stringify(serializable, null, 2), 'utf-8');
@@ -195,6 +199,7 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       dryRun: settings.dryRun,
       lastPolled: typeof parsed.lastPolled === 'number' ? parsed.lastPolled : undefined,
       currentUser: typeof parsed.currentUser === 'string' ? parsed.currentUser : undefined,
+      rateLimitedUntil: typeof parsed.rateLimitedUntil === 'number' ? parsed.rateLimitedUntil : undefined,
     };
   } catch {
     return null;
@@ -212,24 +217,33 @@ export function recordHistoricalPr(data: AppState, pr: PrState): void {
   const existingIdx = data.historicalStats.records.findIndex(
     (r) => prKeyToString(r.key) === keyStr
   );
+  const existing = existingIdx >= 0 ? data.historicalStats.records[existingIdx] : undefined;
+
+  // Guard against overwriting MERGED state with generic CLOSED if mergedAt was previously recorded
+  const finalState = pr.state === 'OPEN'
+    ? (existing?.state === 'MERGED' ? 'MERGED' : pr.state)
+    : (pr.state === 'CLOSED' && existing?.state === 'MERGED' && !pr.closedAt && existing.mergedAt ? 'MERGED' : pr.state);
+
+  const finalMergedAt = pr.mergedAt || (finalState === 'MERGED' ? existing?.mergedAt : undefined);
+  const finalClosedAt = pr.closedAt || existing?.closedAt;
 
   const record: HistoricalPrRecord = {
     key: pr.key,
     author: pr.author,
     title: pr.title,
     createdAt: pr.createdAt,
-    firstReviewAt: pr.firstReviewAt,
-    mergedAt: pr.mergedAt,
-    closedAt: pr.closedAt,
-    state: pr.state,
-    additions: pr.additions || 0,
-    deletions: pr.deletions || 0,
-    changedFiles: pr.changedFiles || 0,
-    commitsCount: pr.commitsCount || 1,
-    commentsCount: pr.commentsCount || 0,
-    unresolvedThreadsCount: pr.unresolvedThreadsCount || 0,
-    ciStatus: pr.ciStatus,
-    scope: pr.scope || 'mine',
+    firstReviewAt: pr.firstReviewAt || existing?.firstReviewAt,
+    mergedAt: finalMergedAt,
+    closedAt: finalClosedAt,
+    state: finalState,
+    additions: pr.additions || existing?.additions || 0,
+    deletions: pr.deletions || existing?.deletions || 0,
+    changedFiles: pr.changedFiles || existing?.changedFiles || 0,
+    commitsCount: pr.commitsCount || existing?.commitsCount || 1,
+    commentsCount: pr.commentsCount || existing?.commentsCount || 0,
+    unresolvedThreadsCount: pr.unresolvedThreadsCount || existing?.unresolvedThreadsCount || 0,
+    ciStatus: pr.ciStatus || existing?.ciStatus || 'SUCCESS',
+    scope: pr.scope || existing?.scope || 'mine',
   };
 
   if (existingIdx >= 0) {
@@ -316,6 +330,9 @@ export function appStateToAppConfig(data: AppState): AppConfig {
       team: data.settings.team,
       filter_user_only: data.settings.filterUserOnly,
       search_query: data.settings.searchQuery,
+      recent_pr_window_days: data.settings.recentPrWindowDays,
+      team_active_window_days: data.settings.teamActiveWindowDays,
+      team_poll_interval_secs: data.settings.teamPollIntervalSecs,
     },
     repos: [],
     agents: { ...data.customAgents },

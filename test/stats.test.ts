@@ -233,10 +233,86 @@ describe('PR Stats & Velocity Engine', () => {
     expect(fullText).toContain('30d');
     expect(fullText).toContain('60d');
     expect(fullText).toContain('90d');
+    expect(fullText).toContain('7d');
+    expect(fullText).toContain('14d');
 
     // Test sorting by comments
     const sortedByComments = calculateStats(state, '30d', 'team', 'comments');
     expect(sortedByComments.memberBreakdown![0].author).toBe('bob');
     expect(sortedByComments.memberBreakdown![0].rank).toBe(1);
+  });
+
+  it('calculates 7d and 14d rolling stats and sorts leaderboard by merged7 and merged14', () => {
+    const state = createEmptyState();
+    state.currentUser = 'alice';
+    state.teamMembers = ['alice', 'bob'];
+
+    const now = Date.now();
+    // PR 1: merged 3 days ago (falls into 7d, 14d, 30d)
+    upsertPR(state, createMockPR(1, {
+      author: 'alice',
+      state: 'MERGED',
+      scope: 'team',
+      createdAt: new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    }));
+
+    // PR 2: merged 10 days ago (falls into 14d, 30d, but NOT 7d)
+    upsertPR(state, createMockPR(2, {
+      author: 'bob',
+      state: 'MERGED',
+      scope: 'team',
+      createdAt: new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }));
+
+    // PR 3: merged 8 days ago (falls into 14d, 30d, but NOT 7d)
+    upsertPR(state, createMockPR(3, {
+      author: 'bob',
+      state: 'MERGED',
+      scope: 'team',
+      createdAt: new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    }));
+
+    // 7d stats
+    const stats7d = calculateStats(state, '7d', 'team');
+    expect(stats7d.totalPRs).toBe(1);
+    expect(stats7d.mergedPRs).toBe(1);
+    expect(stats7d.mergedPRs7).toBe(1);
+    expect(stats7d.mergedPRs14).toBe(3);
+    expect(stats7d.mergedPRs30).toBe(3);
+
+    // 14d stats
+    const stats14d = calculateStats(state, '14d', 'team');
+    expect(stats14d.totalPRs).toBe(3);
+    expect(stats14d.mergedPRs).toBe(3);
+
+    // Sorting by merged7: Alice has 1, Bob has 0 -> Alice rank 1
+    const sorted7 = calculateStats(state, '30d', 'team', 'merged7');
+    expect(sorted7.memberBreakdown![0].author).toBe('alice');
+    expect(sorted7.memberBreakdown![0].merged7).toBe(1);
+    expect(sorted7.memberBreakdown![1].author).toBe('bob');
+    expect(sorted7.memberBreakdown![1].merged7).toBe(0);
+
+    // Sorting by merged14: Bob has 2, Alice has 1 -> Bob rank 1
+    const sorted14 = calculateStats(state, '30d', 'team', 'merged14');
+    expect(sorted14.memberBreakdown![0].author).toBe('bob');
+    expect(sorted14.memberBreakdown![0].merged14).toBe(2);
+    expect(sorted14.memberBreakdown![1].author).toBe('alice');
+    expect(sorted14.memberBreakdown![1].merged14).toBe(1);
+
+    // Render modal with 7d active timeframe
+    const lines = renderStatsModal({
+      stats: stats7d,
+      timeframe: '7d',
+      scope: 'team',
+      sortBy: 'merged7',
+      teamName: 'acme/core',
+      modalWidth: 100,
+      modalHeight: 20,
+    });
+
+    const text = stripAnsi(lines.join('\n'));
+    expect(text).toContain('PR Stats & Leaderboard: Team: core (7d trailing)');
+    expect(text).toContain('Timeframe: [1-5/w]');
+    expect(text).toContain('Ranked by 7d Merged PRs');
   });
 });
