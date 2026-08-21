@@ -1,10 +1,17 @@
-// ── Local REST & SSE API Server ──────────────────────────────────────────
-// Exposes PR status, metadata, and actions via REST and Server-Sent Events (SSE).
+// ── Local REST & SSE API Server ──────────────────────────────────────────────
+// Exposes PR status, filtering, metrics, and actions via HTTP and Server-Sent Events.
 
 import http from 'node:http';
 import { URL } from 'node:url';
 import type { AddressInfo } from 'node:net';
-import type { AppState, ApiStatusResponse, ApiPrResponse, ApiActionType, PrState } from '../app/types.js';
+import type {
+  AppState,
+  ApiStatusResponse,
+  ApiPrResponse,
+  ApiActionType,
+  ApiActionHandler,
+  PrState,
+} from '../app/types.js';
 import { prKeyToString, parsePrKey } from '../app/types.js';
 import { countNeedsAttention } from '../app/state.js';
 
@@ -22,10 +29,30 @@ export interface ApiServerController {
   broadcast: (type: string, data: unknown) => void;
 }
 
-export type ApiActionHandler = (
-  action: ApiActionType,
-  payload: { id?: string; pr?: PrState | null }
-) => void | Promise<void>;
+export function prStateToApiResponse(pr: PrState): ApiPrResponse {
+  return {
+    id: prKeyToString(pr.key),
+    title: pr.title,
+    status: pr.overallStatus,
+    ci: pr.ciStatus,
+    review: pr.reviewVerdict,
+    statusDetail: pr.statusDetail,
+    agent: pr.agent,
+    author: pr.author,
+    branch: pr.branch,
+    baseBranch: pr.baseBranch,
+    url: pr.url,
+    isDraft: pr.isDraft,
+    state: pr.state,
+    ciChecks: pr.ciChecks,
+    log: pr.log.slice(-50),
+    additions: pr.additions,
+    deletions: pr.deletions,
+    changedFiles: pr.changedFiles,
+    commentsCount: pr.commentsCount,
+    unresolvedThreadsCount: pr.unresolvedThreadsCount,
+  };
+}
 
 export function startApiServer(
   data: AppState,
@@ -79,13 +106,21 @@ export function startApiServer(
       return;
     }
 
-    // ── GET /status ───────────────────────────────────────────────────────
-    if (req.method === 'GET' && pathname === '/status') {
+    // ── GET /status or GET /api/status ────────────────────────────────────
+    if (req.method === 'GET' && (pathname === '/status' || pathname === '/api/status')) {
       const prList = Array.from(data.prs.values());
+      const passingCi = prList.filter((p) => p.ciStatus === 'SUCCESS').length;
+      const reviewReady = prList.filter((p) => p.reviewVerdict === 'APPROVED').length;
+
       const status: ApiStatusResponse = {
         reposCount: data.repos.length,
         prsCount: prList.length,
         needsAttentionCount: countNeedsAttention(data),
+        passingCiCount: passingCi,
+        reviewReadyCount: reviewReady,
+        viewScope: data.viewScope || 'mine',
+        currentUser: data.currentUser,
+        rateLimitedUntil: data.rateLimitedUntil,
         items: prList.map((pr) => ({
           id: prKeyToString(pr.key),
           title: pr.title.length > 60 ? pr.title.slice(0, 57) + '…' : pr.title,
@@ -93,15 +128,50 @@ export function startApiServer(
           ci: pr.ciStatus,
           review: pr.reviewVerdict,
           agent: pr.agent,
+          author: pr.author,
+          url: pr.url,
         })),
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(status));
+      res.end(JSON.stringify(status, null, 2));
       return;
     }
 
-    // ── GET /pr/:owner/:repo/:number ──────────────────────────────────────
-    if (req.method === 'GET' && pathname.startsWith('/pr/')) {
+    // ── GET /prs or GET /api/prs ──────────────────────────────────────────
+    if (req.method === 'GET' && (pathname === '/prs' || pathname === '/api/prs')) {
+      let prList = Array.from(data.prs.values());
+
+      const scopeFilter = url.searchParams.get('scope');
+      if (scopeFilter === 'mine') {
+        prList = prList.filter((p) => p.scope === 'mine' || p.scope === 'both');
+      } else if (scopeFilter === 'team') {
+        prList = prList.filter((p) => p.scope === 'team' || p.scope === 'both');
+      }
+
+      const statusFilter = url.searchParams.get('status')?.toLowerCase();
+      if (statusFilter) {
+        prList = prList.filter((p) => p.overallStatus.toLowerCase() === statusFilter);
+      }
+
+      const searchFilter = url.searchParams.get('search')?.toLowerCase();
+      if (searchFilter) {
+        prList = prList.filter(
+          (p) =>
+            p.title.toLowerCase().includes(searchFilter) ||
+            p.key.repo.toLowerCase().includes(searchFilter) ||
+            p.author.toLowerCase().includes(searchFilter) ||
+            p.branch.toLowerCase().includes(searchFilter)
+        );
+      }
+
+      const response = prList.map(prStateToApiResponse);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(response, null, 2));
+      return;
+    }
+
+    // ── GET /prs/:owner/:repo/:number or GET /pr/:owner/:repo/:number ─────
+    if (req.method === 'GET' && (pathname.startsWith('/prs/') || pathname.startsWith('/pr/'))) {
       const parts = pathname.split('/').filter(Boolean);
       if (parts.length >= 4) {
         const owner = parts[1];
@@ -109,9 +179,10 @@ export function startApiServer(
         const number = parseInt(parts[3], 10);
 
         const pr = Array.from(data.prs.values()).find(
-          (p) => p.key.owner.toLowerCase() === owner.toLowerCase() &&
-                 p.key.repo.toLowerCase() === repo.toLowerCase() &&
-                 p.key.number === number
+          (p) =>
+            p.key.owner.toLowerCase() === owner.toLowerCase() &&
+            p.key.repo.toLowerCase() === repo.toLowerCase() &&
+            p.key.number === number
         );
 
         if (!pr) {
@@ -120,26 +191,22 @@ export function startApiServer(
           return;
         }
 
-        const prData: ApiPrResponse = {
-          id: prKeyToString(pr.key),
-          title: pr.title,
-          status: pr.overallStatus,
-          ci: pr.ciStatus,
-          review: pr.reviewVerdict,
-          statusDetail: pr.statusDetail,
-          agent: pr.agent,
-          ciChecks: pr.ciChecks,
-          log: pr.log.slice(-20),
-        };
-
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(prData));
+        res.end(JSON.stringify(prStateToApiResponse(pr), null, 2));
         return;
       }
     }
 
-    // ── POST /action/:type ────────────────────────────────────────────────
-    if (req.method === 'POST' && pathname.startsWith('/action/')) {
+    // ── GET /stats or GET /api/stats ──────────────────────────────────────
+    if (req.method === 'GET' && (pathname === '/stats' || pathname === '/api/stats')) {
+      const stats = data.historicalStats || { records: [] };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(stats, null, 2));
+      return;
+    }
+
+    // ── POST /actions/:action or POST /action/:type ───────────────────────
+    if (req.method === 'POST' && (pathname.startsWith('/actions/') || pathname.startsWith('/action/'))) {
       const actionType = pathname.split('/').pop() as ApiActionType;
       let dataStr = '';
 
@@ -148,7 +215,7 @@ export function startApiServer(
       });
 
       req.on('end', () => {
-        const body: { id?: string } = {};
+        const body: { id?: string; prompt?: string; comment?: string } = {};
         try {
           if (dataStr) {
             Object.assign(body, JSON.parse(dataStr));
@@ -161,14 +228,23 @@ export function startApiServer(
         if (body.id) {
           const parsed = parsePrKey(body.id);
           if (parsed) {
-            targetPR = Array.from(data.prs.values()).find(
-              (p) => p.key.owner === parsed.owner && p.key.repo === parsed.repo && p.key.number === parsed.number
-            ) || null;
+            targetPR =
+              Array.from(data.prs.values()).find(
+                (p) =>
+                  p.key.owner.toLowerCase() === parsed.owner.toLowerCase() &&
+                  p.key.repo.toLowerCase() === parsed.repo.toLowerCase() &&
+                  p.key.number === parsed.number
+              ) || null;
           }
         }
 
         if (onAction) {
-          onAction(actionType, { id: body.id, pr: targetPR });
+          onAction(actionType, {
+            id: body.id,
+            pr: targetPR,
+            prompt: body.prompt,
+            comment: body.comment,
+          });
         }
 
         broadcast('actionTriggered', { action: actionType, id: body.id });

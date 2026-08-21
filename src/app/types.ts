@@ -396,20 +396,29 @@ export interface TUIFooterAction {
   disabled?: boolean;
 }
 
-// ── Local API Types ───────────────────────────────────────────────────────
+// ── Local REST & SSE API Types ─────────────────────────────────────────────
+
+export interface ApiStatusItem {
+  id: string;
+  title: string;
+  status: PrOverallStatus;
+  ci: CiStatus;
+  review: ReviewVerdict;
+  agent?: string;
+  author: string;
+  url: string;
+}
 
 export interface ApiStatusResponse {
   reposCount: number;
   prsCount: number;
   needsAttentionCount: number;
-  items: Array<{
-    id: string;
-    title: string;
-    status: PrOverallStatus;
-    ci: CiStatus;
-    review: ReviewVerdict;
-    agent?: string;
-  }>;
+  passingCiCount: number;
+  reviewReadyCount: number;
+  viewScope: 'mine' | 'team';
+  currentUser?: string;
+  rateLimitedUntil?: number;
+  items: ApiStatusItem[];
 }
 
 export interface ApiPrResponse {
@@ -420,8 +429,33 @@ export interface ApiPrResponse {
   review: ReviewVerdict;
   statusDetail?: string;
   agent?: string;
+  author: string;
+  branch: string;
+  baseBranch: string;
+  url: string;
+  isDraft: boolean;
+  state: 'OPEN' | 'MERGED' | 'CLOSED';
   ciChecks: CiCheckRun[];
   log: string[];
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+  commentsCount: number;
+  unresolvedThreadsCount: number;
 }
 
-export type ApiActionType = 'recheck' | 'merge' | 'agent' | 'open' | 'comment';
+export type ApiActionType =
+  | 'poll'
+  | 'recheck'
+  | 'merge'
+  | 'close'
+  | 'comment'
+  | 'agent'
+  | 'cancel-agent'
+  | 'open'
+  | 'backfill';
+
+export type ApiActionHandler = (
+  action: ApiActionType,
+  payload: { id?: string; pr?: PrState | null; prompt?: string; comment?: string }
+) => void | Promise<void>;

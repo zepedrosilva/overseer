@@ -151,7 +151,7 @@ describe('TUI Components & Engine', () => {
       expect(stripAnsi(stats)).toContain('Repos: 1');
       expect(stripAnsi(stats)).toContain('Open PRs: 2');
       expect(stripAnsi(stats)).toContain('1 Needs Attention');
-      expect(stripAnsi(stats)).toContain(':3210');
+      expect(stripAnsi(stats)).toContain('API: :3210');
     });
 
     it('renders live spinner in stats bar during polling', () => {
@@ -465,7 +465,7 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('Default AI Agent');
       expect(fullText).toContain('Personal Poll Interval');
       expect(fullText).toContain('Team Poll Interval');
-      expect(fullText).toContain('[EXTENSIONS]');
+      expect(fullText).toContain('[LOCAL API]');
       expect(fullText).toContain('Local API Server');
       expect(fullText).toContain('[Esc to save & close]');
     });

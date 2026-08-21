@@ -62,7 +62,7 @@ function parseCliArgs(): CliArgs {
     } else if (arg === '--port' || arg === '--api-port') {
       const p = parseInt(args[++i], 10);
       if (!isNaN(p)) result.port = p;
-    } else if (arg.startsWith('--port=')) {
+    } else if (arg.startsWith('--port=') || arg.startsWith('--api-port=')) {
       const p = parseInt(arg.split('=')[1], 10);
       if (!isNaN(p)) result.port = p;
     } else if (arg === '--agent' && args[i + 1]) {
@@ -347,7 +347,7 @@ async function main(): Promise<void> {
     }
   );
 
-  // 5. Start Local API Server if enabled in state or CLI
+  // 5. Start API Server if enabled in state or CLI
   syncApiServer();
 
   // 6. Asynchronous Background Auth & Initial Poll

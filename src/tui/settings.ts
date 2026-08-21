@@ -25,8 +25,8 @@ export const SETTINGS_ITEMS = [
   { id: 'teamPollInterval', label: 'Team Poll Interval', section: 'TEAM & SCOPE' },
   { id: 'team', label: 'Team Slug / Members', section: 'TEAM & SCOPE' },
   { id: 'searchQuery', label: 'Search Query Override', section: 'TEAM & SCOPE' },
-  { id: 'apiEnabled', label: 'Local API Server', section: 'EXTENSIONS' },
-  { id: 'apiPort', label: 'Local API Port', section: 'EXTENSIONS' },
+  { id: 'apiEnabled', label: 'Local API Server', section: 'LOCAL API' },
+  { id: 'apiPort', label: 'Local API Port', section: 'LOCAL API' },
 ] as const;
 
 export const POLL_INTERVALS = [15, 30, 60, 120, 300];

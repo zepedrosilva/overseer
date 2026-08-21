@@ -33,7 +33,7 @@
   - `[/]` Real-time fuzzy filter & search
 - **🔒 Zero Token Storage**: Relies 100% on the official GitHub CLI (`gh auth login`) — no personal access tokens stored on disk.
 - **📦 Clean Workspace Hygiene**: All persistent state, temporary worktrees, and logs live inside a gitignored `./.overseer/` directory.
-- **🎛️ Local API Extension**: Built-in HTTP and Server-Sent Events (SSE) server for physical button displays and control, dynamically togglable from the UI or CLI.
+- **🔌 Local REST & SSE API**: Built-in HTTP and Server-Sent Events (SSE) server for external integrations, menu bar widgets, Raycast scripts, and hardware displays, dynamically togglable from the UI or CLI.
 
 ---
 
@@ -159,8 +159,9 @@ overseer --dry-run
 # Custom GitHub search query override
 overseer --search "is:pr is:open org:mycompany"
 
-# Reset persisted state in ./.overseer/state.json
+# Reset state or settings
 overseer --reset-state
+overseer --reset-settings
 ```
 
 ---
@@ -221,14 +222,18 @@ You can define custom CLI agents or bot comment triggers locally in the gitignor
 
 ---
 
-## 🎛️ Local REST & SSE API
+## 🔌 Local REST & SSE API
 
-When the Local REST & SSE API is enabled (via Settings modal <kbd>s</kbd> or `--api` flag), Overseer starts an HTTP and Server-Sent Events (SSE) server:
+When the Local API is enabled (via Settings modal <kbd>s</kbd> or `--api` flag), Overseer serves a local REST and Server-Sent Events (SSE) daemon on `http://127.0.0.1:3210` for menu bar widgets, scripts, automation flows, and hardware displays:
 
-- **`GET /status`**: Overall health, monitored repos count, open PR count, needs attention count.
-- **`GET /pr/:owner/:repo/:number`**: Detailed metadata, CI checks, and logs for a PR.
-- **`POST /action/:type`**: Execute actions (`recheck`, `merge`, `agent`, `open`).
-- **`GET /events`**: Real-time SSE stream of status changes and logs.
+### Endpoints
+
+- **`GET /status`**: Health overview, repository count, open PR count, needs-attention count, passing CI count, review-ready count, and item summaries.
+- **`GET /prs`**: Full list of open PRs with query filtering (`?scope=mine|team`, `?status=ready|changes_requested|ci_failing|draft`, `?search=...`).
+- **`GET /prs/:owner/:repo/:number`** (or `/pr/:owner/:repo/:number`): Deep metadata for a PR including detailed CI checks breakdown, review verdict, activity logs, and running agent worker info.
+- **`GET /stats`**: 90-day velocity metrics, team leaderboard, and reviewer turnaround data.
+- **`POST /actions/:action`** (or `/action/:type`): Dispatch operational actions (`poll`/`recheck`, `merge`, `close`, `comment`, `agent`, `cancel-agent`, `open`, `backfill`).
+- **`GET /events`**: Real-time SSE stream (`connected`, `statusChanged`, `pollCompleted`, `workerUpdated`, `actionTriggered`).
 
 ---
 

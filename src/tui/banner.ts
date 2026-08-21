@@ -97,7 +97,7 @@ export function renderStatsBar(
   candidateParts.push(pollIndicator);
 
   if (options?.apiEnabled) {
-    candidateParts.push(`\x1B[${rgbColor(colors.fgDim)}Local API:\x1B[0m \x1B[${rgbColor(colors.cyan)}:${options.apiPort || 3210}\x1B[0m`);
+    candidateParts.push(`\x1B[${rgbColor(colors.fgDim)}API:\x1B[0m \x1B[${rgbColor(colors.cyan)}:${options.apiPort || 3210}\x1B[0m`);
   }
 
   if (data.dryRun) {
