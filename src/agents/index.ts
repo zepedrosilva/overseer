@@ -152,7 +152,7 @@ export function getSpawnExecution(
     return { bin: 'claude', args: ['-p', promptText] };
   }
   if (norm === 'agy' || norm === 'gemini') {
-    return { bin: 'agy', args: ['-p', promptText] };
+    return { bin: 'agy', args: ['--dangerously-skip-permissions', '-p', promptText] };
   }
   if (norm === 'pi') {
     return { bin: 'pi', args: [promptText] };
@@ -179,7 +179,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   // 1. Resolve Playbook & Build Command
   const playbookDef = getPlaybookDefinition(playbookName);
   const basePrompt = options.prompt || playbookDef.promptTemplate;
-  const worktreePath = resolveWorktreeDir(config, pr, cwd);
+  const worktreePath = resolveWorktreeDir(config, pr, agentName, cwd);
 
   const { command, definition, promptText } = buildAgentCommand(
     agentName,
@@ -199,7 +199,8 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   const driver: AgentDriverType = definition.driver || 'local';
 
   // 2. Prepare Log File
-  const logDir = path.join(path.dirname(worktreePath), '..', 'logs');
+  const logFile = resolveLogPath(pr, cwd);
+  const logDir = path.dirname(logFile);
   try {
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
@@ -208,7 +209,6 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     // Ignore if already created
   }
 
-  const logFile = path.join(logDir, `${pr.key.owner}-${pr.key.repo}-${pr.key.number}.log`);
   let logStream: fs.WriteStream | null = null;
   try {
     logStream = fs.createWriteStream(logFile, { flags: 'a' });

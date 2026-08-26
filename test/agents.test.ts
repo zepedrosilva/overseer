@@ -127,6 +127,24 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(wtPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142'));
     });
 
+    it('isolates worktree paths per agent (e.g. claude vs agy)', () => {
+      const pr = createMockPR();
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        defaults: {
+          ...DEFAULT_CONFIG.defaults,
+          worktrees_dir: './.overseer/worktrees',
+        },
+      };
+
+      const claudePath = resolveWorktreeDir(config, pr, 'claude', tmpDir);
+      const agyPath = resolveWorktreeDir(config, pr, 'agy', tmpDir);
+
+      expect(claudePath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-claude'));
+      expect(agyPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-agy'));
+      expect(claudePath).not.toBe(agyPath);
+    });
+
     it('cleans up worktree directory without throwing', () => {
       const folder = path.join(tmpDir, 'test-wt');
       fs.mkdirSync(folder, { recursive: true });

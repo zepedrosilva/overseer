@@ -12,13 +12,30 @@ const execFileAsync = promisify(execFile);
 export function resolveWorktreeDir(
   config: AppConfig,
   pr: PrState,
-  cwd: string = process.cwd()
+  agentNameOrCwd?: string,
+  cwd?: string
 ): string {
+  let agentName: string | undefined;
+  let effectiveCwd: string = process.cwd();
+
+  if (cwd !== undefined) {
+    agentName = agentNameOrCwd;
+    effectiveCwd = cwd;
+  } else if (agentNameOrCwd !== undefined) {
+    if (agentNameOrCwd.includes('/') || agentNameOrCwd.includes('\\') || path.isAbsolute(agentNameOrCwd)) {
+      effectiveCwd = agentNameOrCwd;
+      agentName = undefined;
+    } else {
+      agentName = agentNameOrCwd;
+    }
+  }
+
   const baseDir = path.isAbsolute(config.defaults.worktrees_dir)
     ? config.defaults.worktrees_dir
-    : path.join(cwd, config.defaults.worktrees_dir);
+    : path.join(effectiveCwd, config.defaults.worktrees_dir);
 
-  const folderName = `${pr.key.owner}-${pr.key.repo}-${pr.key.number}`;
+  const agentSuffix = agentName ? `-${agentName.toLowerCase().replace(/[^a-z0-9_-]/g, '')}` : '';
+  const folderName = `${pr.key.owner}-${pr.key.repo}-${pr.key.number}${agentSuffix}`;
   return path.join(baseDir, folderName);
 }
 
@@ -100,7 +117,23 @@ export function cleanupPRLogs(pr: PrState, cwd: string = process.cwd()): void {
 }
 
 export function cleanupPRArtifacts(pr: PrState, config: AppConfig, cwd: string = process.cwd()): void {
-  const worktreePath = resolveWorktreeDir(config, pr, cwd);
-  cleanupWorktree(worktreePath);
+  const baseDir = path.isAbsolute(config.defaults.worktrees_dir)
+    ? config.defaults.worktrees_dir
+    : path.join(cwd, config.defaults.worktrees_dir);
+
+  const prefix = `${pr.key.owner}-${pr.key.repo}-${pr.key.number}`;
+  if (fs.existsSync(baseDir)) {
+    try {
+      const entries = fs.readdirSync(baseDir);
+      for (const entry of entries) {
+        if (entry === prefix || entry.startsWith(`${prefix}-`)) {
+          cleanupWorktree(path.join(baseDir, entry));
+        }
+      }
+    } catch {
+      cleanupWorktree(resolveWorktreeDir(config, pr, undefined, cwd));
+    }
+  }
+
   cleanupPRLogs(pr, cwd);
 }
