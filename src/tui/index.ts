@@ -71,6 +71,14 @@ export function createTUI(
   let backfillProgress: BackfillProgress | null = null;
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
+  let selectedPlaybookIndex = 0;
+  const availablePlaybooks = [
+    'preflight-review',
+    'ci-repair',
+    'address-comments',
+    'rebase-resolver',
+    'custom...',
+  ];
 
   // Live animation ticker (100ms) for spinners during polling, active CI workflows, and worker runs
   const animationTimer = setInterval(() => {
@@ -350,6 +358,8 @@ export function createTUI(
         inputBuffer,
         selectedAgent: currentChosenAgent,
         availableAgents,
+        selectedPlaybookIndex,
+        availablePlaybooks,
         repoMode: selectedPR ? getRepoMode(data, selectedPR.key) : undefined,
         message: statusMessage,
       };
@@ -1304,7 +1314,7 @@ export function createTUI(
           return;
         }
 
-        if (key === '\x0d') { // Enter confirms selection, persists to repo, and opens prompt input
+        if (key === '\x0d') { // Enter confirms selection, persists to repo, and opens playbook preset picker
           const chosenAgent = availableAgents[selectedAgentIndex] || 'claude';
           if (pr) {
             setRepoAgent(data, pr.key, chosenAgent);
@@ -1313,8 +1323,61 @@ export function createTUI(
             saveSettings(data);
             saveState(data);
           }
-          footerMode = 'AGENT_INPUT';
-          inputBuffer = '';
+          footerMode = 'PLAYBOOK_SELECT';
+          selectedPlaybookIndex = 0;
+          render();
+          return;
+        }
+        return;
+      }
+
+      // Handle Playbook Preset Selection Mode (PLAYBOOK_SELECT)
+      if (footerMode === 'PLAYBOOK_SELECT') {
+        const pr = getSelectedPR();
+
+        if (key === '\x1b') { // Esc goes back to agent picker
+          footerMode = 'AGENT_SELECT';
+          render();
+          return;
+        }
+
+        // Direct number key selection
+        const num = parseInt(key, 10);
+        if (!isNaN(num) && num >= 1 && num <= availablePlaybooks.length) {
+          selectedPlaybookIndex = num - 1;
+          render();
+          return;
+        }
+
+        if (key === '\x1b[D' || key === 'h') { // Left
+          selectedPlaybookIndex = (selectedPlaybookIndex - 1 + availablePlaybooks.length) % availablePlaybooks.length;
+          render();
+          return;
+        }
+
+        if (key === '\x1b[C' || key === 'l' || key === '\t') { // Right or Tab
+          selectedPlaybookIndex = (selectedPlaybookIndex + 1) % availablePlaybooks.length;
+          render();
+          return;
+        }
+
+        if (key === '\x0d') { // Enter dispatches selected playbook or opens custom prompt
+          const chosenPlaybook = availablePlaybooks[selectedPlaybookIndex];
+          const chosenAgent = availableAgents[selectedAgentIndex] || 'claude';
+
+          if (chosenPlaybook === 'custom...') {
+            footerMode = 'AGENT_INPUT';
+            inputBuffer = '';
+          } else {
+            footerMode = 'NORMAL';
+            if (pr) {
+              onAction('agent', {
+                pr,
+                agentName: chosenAgent,
+                playbookName: chosenPlaybook,
+              });
+            }
+          }
           render();
           return;
         }
@@ -1328,7 +1391,7 @@ export function createTUI(
             searchQuery = '';
           }
           if (footerMode === 'AGENT_INPUT') {
-            footerMode = 'AGENT_SELECT';
+            footerMode = 'PLAYBOOK_SELECT';
             render();
             return;
           }
@@ -1352,7 +1415,12 @@ export function createTUI(
             }
           } else if (currentMode === 'AGENT_INPUT') {
             const chosenAgent = availableAgents[selectedAgentIndex] || 'claude';
-            onAction('agent', { prompt: val, pr: getSelectedPR(), agentName: chosenAgent });
+            onAction('agent', {
+              prompt: val || undefined,
+              pr: getSelectedPR(),
+              agentName: chosenAgent,
+              playbookName: 'custom',
+            });
           }
 
           render();

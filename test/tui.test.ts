@@ -425,7 +425,7 @@ describe('TUI Components & Engine', () => {
         inputBuffer: 'fix typos',
         selectedAgent: 'agy',
       }, 100);
-      expect(stripAnsi(agentFooter)).toContain('Agent [agy] prompt: fix typos');
+      expect(stripAnsi(agentFooter)).toContain('Custom prompt [agy]: fix typos');
     });
 
     it('renders 2-step agent selector footer with available agent badges', () => {
@@ -443,7 +443,24 @@ describe('TUI Components & Engine', () => {
       expect(text).toContain('[2] agy');
       expect(text).toContain('[3] gemini');
       expect(text).toContain('Mode:');
-      expect(text).toContain('[Enter] save & prompt');
+      expect(text).toContain('[Enter] select playbook');
+    });
+
+    it('renders playbook preset selector footer with preset badges', () => {
+      const pr = createMockPR(142);
+      const selectFooter = renderFooter({
+        mode: 'PLAYBOOK_SELECT',
+        selectedPR: pr,
+        inputBuffer: '',
+        selectedPlaybookIndex: 0,
+        availablePlaybooks: ['preflight-review', 'ci-repair', 'address-comments', 'rebase-resolver', 'custom...'],
+      }, 120);
+      const text = stripAnsi(selectFooter);
+      expect(text).toContain('Playbook for #142:');
+      expect(text).toContain('[1] preflight-review');
+      expect(text).toContain('[2] ci-repair');
+      expect(text).toContain('[5] custom...');
+      expect(text).toContain('[Enter] dispatch');
     });
   });
 
