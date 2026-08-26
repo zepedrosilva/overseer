@@ -214,7 +214,7 @@ export function getSpawnExecution(
     return { bin: 'claude', args: ['--dangerously-skip-permissions', '-p', promptText] };
   }
   if (norm === 'agy' || norm === 'gemini') {
-    return { bin: 'agy', args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '-p', promptText] };
+    return { bin: 'agy', args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '--print-timeout', '20m', '-p', promptText] };
   }
   if (norm === 'pi') {
     return { bin: 'pi', args: [promptText] };

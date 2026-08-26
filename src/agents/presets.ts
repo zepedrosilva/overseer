@@ -12,14 +12,14 @@ export const BUILTIN_PRESETS: Record<string, AgentDefinition> = {
   },
   gemini: {
     bin: 'agy',
-    args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '-p', '{prompt}'],
-    command: 'agy --sandbox --dangerously-skip-permissions --add-dir . -p "{prompt}"',
+    args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '--print-timeout', '20m', '-p', '{prompt}'],
+    command: 'agy --sandbox --dangerously-skip-permissions --add-dir . --print-timeout 20m -p "{prompt}"',
     description: 'Antigravity / Gemini CLI agent',
   },
   agy: {
     bin: 'agy',
-    args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '-p', '{prompt}'],
-    command: 'agy --sandbox --dangerously-skip-permissions --add-dir . -p "{prompt}"',
+    args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '--print-timeout', '20m', '-p', '{prompt}'],
+    command: 'agy --sandbox --dangerously-skip-permissions --add-dir . --print-timeout 20m -p "{prompt}"',
     description: 'Antigravity CLI agent',
   },
   pi: {

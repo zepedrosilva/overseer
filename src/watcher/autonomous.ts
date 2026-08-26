@@ -12,6 +12,7 @@ import {
   fetchUnresolvedReviewComments,
   fetchPrDiffSummary,
 } from './gh.js';
+import { chunkReviewFeedback } from './feedbackChunker.js';
 
 export const MAX_CONCURRENT_WORKERS = 2;
 export const MAX_CONSECUTIVE_AUTONOMOUS_RETRIES = 2;
@@ -22,6 +23,7 @@ const prRetryCounters = new Map<string, number>();
 const prLastDispatchAt = new Map<string, number>();
 const prReviewedKeys = new Set<string>();
 const prFixedKeys = new Set<string>();
+const prBatchIndex = new Map<string, number>();
 
 export function getPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review'): number {
   if (stage) {
@@ -45,6 +47,8 @@ export function resetPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review
   prRetryCounters.delete(`${keyStr}:ci`);
   prRetryCounters.delete(`${keyStr}:fix`);
   prRetryCounters.delete(`${keyStr}:review`);
+  prBatchIndex.delete(keyStr);
+  prBatchIndex.delete(`${keyStr}:fix`);
 }
 
 export function resetAutonomousState(): void {
@@ -52,6 +56,7 @@ export function resetAutonomousState(): void {
   prLastDispatchAt.clear();
   prReviewedKeys.clear();
   prFixedKeys.clear();
+  prBatchIndex.clear();
 }
 
 function pruneAutonomousCaches(): void {
@@ -224,21 +229,9 @@ export async function evaluateAutonomousPolicies(
             continue;
           }
 
-          const playbookName = 'address-comments';
-
-          prFixedKeys.add(fixKey);
-          prRetryCounters.set(fixStageKey, retryCount + 1);
-          prLastDispatchAt.set(fixStageKey, Date.now());
-
-          appendLog(
-            data,
-            pr.key,
-            `[policy] Autonomous trigger fired: Address Comments on ${keyStr} (${playbookName})`
-          );
-
-          let comments = 'Reviewers provided comments and feedback.';
+          let rawComments = 'Reviewers provided comments and feedback.';
           try {
-            comments = await fetchUnresolvedReviewComments(
+            rawComments = await fetchUnresolvedReviewComments(
               pr.key.owner,
               pr.key.repo,
               pr.key.number
@@ -246,6 +239,29 @@ export async function evaluateAutonomousPolicies(
           } catch {
             // Fallback
           }
+
+          const chunks = chunkReviewFeedback(rawComments, 3);
+          const currentBatchIdx = prBatchIndex.get(fixStageKey) || 0;
+          const activeChunk = chunks[currentBatchIdx] || chunks[0];
+          const isLastBatch = currentBatchIdx + 1 >= chunks.length;
+
+          const playbookName = 'address-comments';
+
+          if (isLastBatch) {
+            prFixedKeys.add(fixKey);
+            prBatchIndex.delete(fixStageKey);
+          } else {
+            prBatchIndex.set(fixStageKey, currentBatchIdx + 1);
+          }
+
+          prRetryCounters.set(fixStageKey, retryCount + 1);
+          prLastDispatchAt.set(fixStageKey, Date.now());
+
+          appendLog(
+            data,
+            pr.key,
+            `[policy] Autonomous trigger fired: Address Comments on ${keyStr} (Batch ${activeChunk.index}/${activeChunk.total})`
+          );
 
           const fixerAgent = getRepoRoleAgent(data, pr.key, 'fixer');
           await dispatchAgent({
@@ -256,7 +272,7 @@ export async function evaluateAutonomousPolicies(
             playbookName,
             trigger: 'autonomous_review',
             mode: effectiveMode,
-            comments,
+            comments: activeChunk.content,
             cwd,
           });
 
