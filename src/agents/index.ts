@@ -152,7 +152,7 @@ export function getSpawnExecution(
     return { bin: 'claude', args: ['-p', promptText] };
   }
   if (norm === 'agy' || norm === 'gemini') {
-    return { bin: 'agy', args: [promptText] };
+    return { bin: 'agy', args: ['-p', promptText] };
   }
   if (norm === 'pi') {
     return { bin: 'pi', args: [promptText] };
