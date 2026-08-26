@@ -179,7 +179,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   // 1. Resolve Playbook & Build Command
   const playbookDef = getPlaybookDefinition(playbookName);
   const basePrompt = options.prompt || playbookDef.promptTemplate;
-  const worktreePath = resolveWorktreeDir(config, pr, agentName, cwd);
+  const worktreePath = resolveWorktreeDir(config, pr, agentName, playbookName, cwd);
 
   const { command, definition, promptText } = buildAgentCommand(
     agentName,

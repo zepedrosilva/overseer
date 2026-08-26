@@ -13,18 +13,28 @@ export function resolveWorktreeDir(
   config: AppConfig,
   pr: PrState,
   agentNameOrCwd?: string,
+  playbookNameOrCwd?: string,
   cwd?: string
 ): string {
   let agentName: string | undefined;
+  let playbookName: string | undefined;
   let effectiveCwd: string = process.cwd();
 
   if (cwd !== undefined) {
     agentName = agentNameOrCwd;
+    playbookName = playbookNameOrCwd;
     effectiveCwd = cwd;
+  } else if (playbookNameOrCwd !== undefined) {
+    if (playbookNameOrCwd.includes('/') || playbookNameOrCwd.includes('\\') || path.isAbsolute(playbookNameOrCwd)) {
+      agentName = agentNameOrCwd;
+      effectiveCwd = playbookNameOrCwd;
+    } else {
+      agentName = agentNameOrCwd;
+      playbookName = playbookNameOrCwd;
+    }
   } else if (agentNameOrCwd !== undefined) {
     if (agentNameOrCwd.includes('/') || agentNameOrCwd.includes('\\') || path.isAbsolute(agentNameOrCwd)) {
       effectiveCwd = agentNameOrCwd;
-      agentName = undefined;
     } else {
       agentName = agentNameOrCwd;
     }
@@ -35,7 +45,8 @@ export function resolveWorktreeDir(
     : path.join(effectiveCwd, config.defaults.worktrees_dir);
 
   const agentSuffix = agentName ? `-${agentName.toLowerCase().replace(/[^a-z0-9_-]/g, '')}` : '';
-  const folderName = `${pr.key.owner}-${pr.key.repo}-${pr.key.number}${agentSuffix}`;
+  const playbookSuffix = playbookName ? `-${playbookName.toLowerCase().replace(/[^a-z0-9_-]/g, '')}` : '';
+  const folderName = `${pr.key.owner}-${pr.key.repo}-${pr.key.number}${agentSuffix}${playbookSuffix}`;
   return path.join(baseDir, folderName);
 }
 
@@ -52,11 +63,28 @@ export async function provisionWorktree(
     fs.mkdirSync(worktreePath, { recursive: true });
   }
 
-  // Initialize and checkout PR branch using gh CLI
-  try {
-    // Clone minimal repo into worktree if not already a git repository
-    const gitDir = path.join(worktreePath, '.git');
-    if (!fs.existsSync(gitDir)) {
+  const gitDir = path.join(worktreePath, '.git');
+  if (fs.existsSync(gitDir)) {
+    // If worktree already exists, fetch latest commit, hard reset, and clean untracked files
+    try {
+      await execFileAsync('git', ['fetch', 'origin', pr.branch, '--depth', '1'], {
+        cwd: worktreePath,
+      });
+      await execFileAsync('git', ['checkout', pr.branch], {
+        cwd: worktreePath,
+      });
+      await execFileAsync('git', ['reset', '--hard', `origin/${pr.branch}`], {
+        cwd: worktreePath,
+      });
+      await execFileAsync('git', ['clean', '-fd'], {
+        cwd: worktreePath,
+      });
+    } catch {
+      // Ignore if offline / mock environment
+    }
+  } else {
+    // Initialize and clone minimal PR branch using gh CLI
+    try {
       await execFileAsync('gh', [
         'repo', 'clone',
         `${pr.key.owner}/${pr.key.repo}`,
@@ -65,15 +93,15 @@ export async function provisionWorktree(
         '--depth', '1',
         '--branch', pr.branch,
       ]);
-    }
-  } catch {
-    // Fallback: checkout PR directly inside worktree folder
-    try {
-      await execFileAsync('gh', ['pr', 'checkout', String(pr.key.number), '--repo', `${pr.key.owner}/${pr.key.repo}`], {
-        cwd: worktreePath,
-      });
     } catch {
-      // Worktree initialized with available files
+      // Fallback: checkout PR directly inside worktree folder
+      try {
+        await execFileAsync('gh', ['pr', 'checkout', String(pr.key.number), '--repo', `${pr.key.owner}/${pr.key.repo}`], {
+          cwd: worktreePath,
+        });
+      } catch {
+        // Worktree initialized with available files
+      }
     }
   }
 
@@ -85,6 +113,15 @@ export async function provisionWorktree(
       });
     } catch {
       // Ignore if remote configuration fails in mock environments
+    }
+  } else {
+    // Restore push URL if previously disabled
+    try {
+      await execFileAsync('git', ['remote', 'set-url', '--push', 'origin', `https://github.com/${pr.key.owner}/${pr.key.repo}.git`], {
+        cwd: worktreePath,
+      });
+    } catch {
+      // Ignore
     }
   }
 

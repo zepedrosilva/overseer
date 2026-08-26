@@ -127,7 +127,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(wtPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142'));
     });
 
-    it('isolates worktree paths per agent (e.g. claude vs agy)', () => {
+    it('isolates worktree paths per agent and playbook (e.g. claude-preflight-review vs agy-address-comments)', () => {
       const pr = createMockPR();
       const config: AppConfig = {
         ...DEFAULT_CONFIG,
@@ -137,12 +137,21 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const claudePath = resolveWorktreeDir(config, pr, 'claude', tmpDir);
-      const agyPath = resolveWorktreeDir(config, pr, 'agy', tmpDir);
+      const claudePath = resolveWorktreeDir(config, pr, 'claude', 'preflight-review', tmpDir);
+      const agyFixPath = resolveWorktreeDir(config, pr, 'agy', 'address-comments', tmpDir);
+      const agyCiPath = resolveWorktreeDir(config, pr, 'agy', 'ci-repair', tmpDir);
 
-      expect(claudePath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-claude'));
-      expect(agyPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-agy'));
-      expect(claudePath).not.toBe(agyPath);
+      expect(claudePath).toBe(
+        path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-claude-preflight-review')
+      );
+      expect(agyFixPath).toBe(
+        path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-agy-address-comments')
+      );
+      expect(agyCiPath).toBe(
+        path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-agy-ci-repair')
+      );
+      expect(claudePath).not.toBe(agyFixPath);
+      expect(agyFixPath).not.toBe(agyCiPath);
     });
 
     it('cleans up worktree directory without throwing', () => {
