@@ -5,7 +5,7 @@
 import type { AppState, PrState } from '../app/types.js';
 import { getRepoMode, getRepoRoleAgent } from '../app/state.js';
 import { colors, rgbColor } from './colors.js';
-import { padEndVisual } from './layout.js';
+import { padEndVisual, truncateVisual, visualLength } from './layout.js';
 
 export interface AgentModalState {
   selectedIndex: number; // 0..4 for playbooks
@@ -51,16 +51,51 @@ export const PLAYBOOK_OPTIONS: PlaybookOption[] = [
   },
 ];
 
+export interface RenderAgentModalOptions {
+  data: AppState;
+  selectedPR: PrState | null;
+  modalState: AgentModalState;
+  modalWidth: number;
+  modalHeight: number;
+}
+
+export function renderAgentModal(options: RenderAgentModalOptions): string[];
 export function renderAgentModal(
   data: AppState,
   selectedPR: PrState | null,
   modalState: AgentModalState,
-  width: number,
-  height: number
+  modalWidth: number,
+  modalHeight: number
+): string[];
+export function renderAgentModal(
+  arg1: AppState | RenderAgentModalOptions,
+  arg2?: PrState | null,
+  arg3?: AgentModalState,
+  arg4?: number,
+  arg5?: number
 ): string[] {
-  const modalWidth = Math.min(84, Math.max(60, width - 4));
-  const innerWidth = modalWidth - 4;
-  const lines: string[] = [];
+  let data: AppState;
+  let selectedPR: PrState | null;
+  let modalState: AgentModalState;
+  let modalWidth: number;
+  let modalHeight: number;
+
+  if ('modalWidth' in arg1) {
+    data = arg1.data;
+    selectedPR = arg1.selectedPR;
+    modalState = arg1.modalState;
+    modalWidth = arg1.modalWidth;
+    modalHeight = arg1.modalHeight;
+  } else {
+    data = arg1;
+    selectedPR = arg2 || null;
+    modalState = arg3 || { selectedIndex: 0 };
+    modalWidth = arg4 || 80;
+    modalHeight = arg5 || 20;
+  }
+
+  const innerWidth = Math.max(10, modalWidth - 4);
+  const outputLines: string[] = [];
 
   const repoKey = selectedPR ? `${selectedPR.key.owner}/${selectedPR.key.repo}` : 'Repository';
   const prNumStr = selectedPR ? `#${selectedPR.key.number}` : '';
@@ -76,59 +111,90 @@ export function renderAgentModal(
       ? `\x1B[${rgbColor(colors.yellow)}🟡 DRY-RUN\x1B[0m`
       : `\x1B[${rgbColor(colors.fgDim)}⚪ OFF\x1B[0m`;
 
-  // Top Border
-  const titleText = ` 🤖 Agent & Automation Config: ${repoKey}${prNumStr ? ' ' + prNumStr : ''} `;
-  const topBorder = `┌─\x1B[1;37m${titleText}\x1B[0m${'─'.repeat(Math.max(0, modalWidth - titleText.length - 18))}[Esc to close]─┐`;
-  lines.push(topBorder);
+  const addLine = (content: string) => {
+    const truncated = truncateVisual(content, innerWidth);
+    const padded = padEndVisual(truncated, innerWidth);
+    outputLines.push(`\x1B[${rgbColor(colors.cyan)}│\x1B[0m ${padded} \x1B[${rgbColor(colors.cyan)}│\x1B[0m`);
+  };
 
-  // Blank line
-  lines.push(`│${' '.repeat(modalWidth - 2)}│`);
+  const addDivider = () => {
+    const div = '─'.repeat(innerWidth);
+    outputLines.push(`\x1B[${rgbColor(colors.cyan)}├─${div}─┤\x1B[0m`);
+  };
+
+  // Top Border
+  const titleLeft = ` 🤖 Agent & Automation Config: ${repoKey}${prNumStr ? ' ' + prNumStr : ''} `;
+  const titleRight = ` [Esc to close] `;
+  const availableDash = modalWidth - visualLength(titleLeft) - visualLength(titleRight) - 4;
+
+  let topBorder: string;
+  if (availableDash >= 0) {
+    const dashes = '─'.repeat(availableDash);
+    topBorder = `\x1B[${rgbColor(colors.cyan)}┌─\x1B[1;37m${titleLeft}\x1B[0m\x1B[${rgbColor(colors.cyan)}${dashes}\x1B[${rgbColor(colors.fgDim)}${titleRight}\x1B[0m\x1B[${rgbColor(colors.cyan)}─┐\x1B[0m`;
+  } else {
+    const shortTitle = ` 🤖 Agent: ${repoKey} `;
+    const shortDash = modalWidth - visualLength(shortTitle) - visualLength(titleRight) - 4;
+    if (shortDash >= 0) {
+      topBorder = `\x1B[${rgbColor(colors.cyan)}┌─\x1B[1;37m${shortTitle}\x1B[0m\x1B[${rgbColor(colors.cyan)}${'─'.repeat(shortDash)}\x1B[${rgbColor(colors.fgDim)}${titleRight}\x1B[0m\x1B[${rgbColor(colors.cyan)}─┐\x1B[0m`;
+    } else {
+      topBorder = `\x1B[${rgbColor(colors.cyan)}┌${'─'.repeat(Math.max(0, modalWidth - 2))}┐\x1B[0m`;
+    }
+  }
+  outputLines.push(padEndVisual(topBorder, modalWidth));
 
   // Section 1: Policy & Multi-Agent Roles
-  lines.push(`│  \x1B[1;36m⚙️  REPOSITORY AUTOMATION POLICY\x1B[0m${' '.repeat(Math.max(0, innerWidth - 31))}│`);
+  addLine(`\x1B[1;36m⚙️  REPOSITORY AUTOMATION POLICY\x1B[0m`);
 
-  const modeLine = `    • Policy Mode:       ${modeBadge}  \x1B[${rgbColor(colors.fgDim)}(off, dry-run, live)\x1B[0m`;
-  const modeKeyHint = `\x1B[${rgbColor(colors.cyan)}[m]\x1B[0m cycle mode`;
-  lines.push(`│${padEndVisual(modeLine, innerWidth - 15)}${modeKeyHint}  │`);
+  const modeLeft = `  • Policy Mode:       ${modeBadge}  \x1B[${rgbColor(colors.fgDim)}(off, dry-run, live)\x1B[0m`;
+  const modeRight = `\x1B[${rgbColor(colors.cyan)}[m]\x1B[0m cycle mode`;
+  const modeSpacing = Math.max(2, innerWidth - visualLength(modeLeft) - visualLength(modeRight));
+  addLine(`${modeLeft}${' '.repeat(modeSpacing)}${modeRight}`);
 
-  const revLine = `    • Reviewer Agent:    \x1B[1;37m🤖 ${reviewerAgent}\x1B[0m`;
-  const revHint = `\x1B[${rgbColor(colors.cyan)}[1]\x1B[0m cycle reviewer`;
-  lines.push(`│${padEndVisual(revLine, innerWidth - 19)}${revHint}  │`);
+  const revLeft = `  • Reviewer Agent:    \x1B[1;37m🤖 ${reviewerAgent}\x1B[0m`;
+  const revRight = `\x1B[${rgbColor(colors.cyan)}[1]\x1B[0m cycle reviewer`;
+  const revSpacing = Math.max(2, innerWidth - visualLength(revLeft) - visualLength(revRight));
+  addLine(`${revLeft}${' '.repeat(revSpacing)}${revRight}`);
 
-  const fixLine = `    • Fixer Agent:       \x1B[1;37m🤖 ${fixerAgent}\x1B[0m`;
-  const fixHint = `\x1B[${rgbColor(colors.cyan)}[2]\x1B[0m cycle fixer`;
-  lines.push(`│${padEndVisual(fixLine, innerWidth - 16)}${fixHint}  │`);
+  const fixLeft = `  • Fixer Agent:       \x1B[1;37m🤖 ${fixerAgent}\x1B[0m`;
+  const fixRight = `\x1B[${rgbColor(colors.cyan)}[2]\x1B[0m cycle fixer`;
+  const fixSpacing = Math.max(2, innerWidth - visualLength(fixLeft) - visualLength(fixRight));
+  addLine(`${fixLeft}${' '.repeat(fixSpacing)}${fixRight}`);
 
-  const ciLine = `    • CI Repair Agent:   \x1B[1;37m🤖 ${ciAgent}\x1B[0m`;
-  const ciHint = `\x1B[${rgbColor(colors.cyan)}[3]\x1B[0m cycle CI agent`;
-  lines.push(`│${padEndVisual(ciLine, innerWidth - 19)}${ciHint}  │`);
+  const ciLeft = `  • CI Repair Agent:   \x1B[1;37m🤖 ${ciAgent}\x1B[0m`;
+  const ciRight = `\x1B[${rgbColor(colors.cyan)}[3]\x1B[0m cycle CI agent`;
+  const ciSpacing = Math.max(2, innerWidth - visualLength(ciLeft) - visualLength(ciRight));
+  addLine(`${ciLeft}${' '.repeat(ciSpacing)}${ciRight}`);
 
-  // Section Divider
-  lines.push(`│  \x1B[${rgbColor(colors.fgDim)}${'─'.repeat(innerWidth)}\x1B[0m  │`);
+  addDivider();
 
   // Section 2: Playbook Presets
-  lines.push(`│  \x1B[1;36m⚡ ON-DEMAND PLAYBOOK DISPATCH\x1B[0m${' '.repeat(Math.max(0, innerWidth - 29))}│`);
-  lines.push(`│  \x1B[${rgbColor(colors.fgDim)}Select a playbook to run immediately on this PR:\x1B[0m${' '.repeat(Math.max(0, innerWidth - 49))}│`);
-  lines.push(`│${' '.repeat(modalWidth - 2)}│`);
+  addLine(`\x1B[1;36m⚡ ON-DEMAND PLAYBOOK DISPATCH\x1B[0m`);
+  addLine(`\x1B[${rgbColor(colors.fgDim)}Select a playbook to run immediately on this PR:\x1B[0m`);
 
   PLAYBOOK_OPTIONS.forEach((opt, idx) => {
     const isSelected = idx === modalState.selectedIndex;
     const dot = isSelected ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
     const hotkey = `\x1B[${rgbColor(colors.cyan)}[${opt.hotkey}]\x1B[0m`;
     const nameColor = isSelected ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
-    const line = `    ${dot} ${hotkey} ${nameColor}${opt.name}\x1B[0m  \x1B[${rgbColor(colors.fgDim)}(${opt.description})\x1B[0m`;
-    lines.push(`│${padEndVisual(line, innerWidth + 2)}│`);
+    const line = `  ${dot} ${hotkey} ${nameColor}${opt.name}\x1B[0m  \x1B[${rgbColor(colors.fgDim)}(${opt.description})\x1B[0m`;
+    addLine(line);
   });
 
-  lines.push(`│${' '.repeat(modalWidth - 2)}│`);
-  lines.push(`│  \x1B[${rgbColor(colors.fgDim)}${'─'.repeat(innerWidth)}\x1B[0m  │`);
-
-  // Footer Navigation
-  const navText = `  \x1B[${rgbColor(colors.cyan)}[Enter/r/c/f/b/x]\x1B[0m Dispatch  \x1B[${rgbColor(colors.cyan)}[m/1/2/3]\x1B[0m Roles  \x1B[${rgbColor(colors.fgDim)}[Esc] Close\x1B[0m`;
-  lines.push(`│${padEndVisual(navText, innerWidth + 2)}│`);
+  // Pad to modalHeight - 1
+  while (outputLines.length < modalHeight - 1) {
+    addLine('');
+  }
 
   // Bottom Border
-  lines.push(`└${'─'.repeat(modalWidth - 2)}┘`);
+  const footerHelp = modalWidth < 70 ? ` [Enter] Run  [Esc] Close ` : ` [Enter/r/c/f/b/x] Dispatch  [m/1/2/3] Roles  [Esc] Close `;
+  const availableBotDash = modalWidth - visualLength(footerHelp) - 4;
+  let botBorder: string;
+  if (availableBotDash >= 0) {
+    botBorder = `\x1B[${rgbColor(colors.cyan)}└─\x1B[${rgbColor(colors.fgDim)}${footerHelp}\x1B[0m\x1B[${rgbColor(colors.cyan)}${'─'.repeat(availableBotDash)}─┘\x1B[0m`;
+  } else {
+    botBorder = `\x1B[${rgbColor(colors.cyan)}└${'─'.repeat(Math.max(0, modalWidth - 2))}┘\x1B[0m`;
+  }
+  outputLines.push(padEndVisual(botBorder, modalWidth));
 
-  return lines;
+  return outputLines;
 }

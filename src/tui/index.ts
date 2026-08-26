@@ -580,14 +580,19 @@ export function createTUI(
       // 13. Agent & Automation Modal Overlay (if open)
       if (isAgentModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isDetailsModalOpen && !isStatsModalOpen && !isHelpModalOpen && !isBackfillModalOpen) {
         const headerOffset = bannerLines.length + 5;
-        const modalLines = renderAgentModal(
+        const modalHeight = Math.max(16, Math.min(22, layout.bodyHeight));
+        const isSmallScreen = layout.width < 90;
+        const widthRatio = isSmallScreen ? 0.96 : 0.85;
+        const modalWidth = Math.max(50, Math.min(84, Math.floor(layout.width * widthRatio)));
+
+        const modalLines = renderAgentModal({
           data,
           selectedPR,
-          { selectedIndex: agentModalPlaybookIndex },
-          layout.width,
-          layout.height
-        );
-        const modalWidth = Math.min(84, Math.max(60, layout.width - 4));
+          modalState: { selectedIndex: agentModalPlaybookIndex },
+          modalWidth,
+          modalHeight,
+        });
+
         const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
         const leftPad = ' '.repeat(xStart);
         const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));

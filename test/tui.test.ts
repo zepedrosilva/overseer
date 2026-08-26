@@ -636,5 +636,18 @@ describe('TUI Components & Engine', () => {
       });
       testModalGeometry('LogsModal', lines, 94, 18);
     });
+
+    it('validates 8. Agent & Automation Modal frame trace across various screen widths', () => {
+      for (const width of [60, 75, 84, 100, 120]) {
+        const lines = renderAgentModal({
+          data: state,
+          selectedPR: pr,
+          modalState: { selectedIndex: 0 },
+          modalWidth: width,
+          modalHeight: 20,
+        });
+        testModalGeometry(`AgentModal (${width}w)`, lines, width, 20);
+      }
+    });
   });
 });
