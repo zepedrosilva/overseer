@@ -9,11 +9,11 @@ export const BUILTIN_PRESETS: Record<string, AgentDefinition> = {
     description: 'Claude CLI autonomous assistant',
   },
   gemini: {
-    command: 'agy --dangerously-skip-permissions -p "{prompt}"',
+    command: 'agy --sandbox --dangerously-skip-permissions -p "{prompt}"',
     description: 'Antigravity / Gemini CLI agent',
   },
   agy: {
-    command: 'agy --dangerously-skip-permissions -p "{prompt}"',
+    command: 'agy --sandbox --dangerously-skip-permissions -p "{prompt}"',
     description: 'Antigravity CLI agent',
   },
   pi: {

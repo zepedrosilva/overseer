@@ -9,6 +9,7 @@ import {
   cleanupWorktree,
   cleanupPRLogs,
   cleanupPRArtifacts,
+  buildSanitizedEnvironment,
   dispatchAgent,
   cancelWorker,
 } from '../src/agents/index.js';
@@ -109,6 +110,38 @@ describe('AI Agent Dispatcher & Worktrees', () => {
 
       const { command } = buildAgentCommand('custom-reviewer', pr, config, '/tmp/wt');
       expect(command).toBe('custom-cli review --pr 142');
+    });
+  });
+
+  describe('Environment Sanitization & Security Sandbox', () => {
+    it('strips cloud credentials and tokens while retaining runtime allowlisted vars', () => {
+      const mockHostEnv: NodeJS.ProcessEnv = {
+        PATH: '/usr/local/bin:/usr/bin',
+        HOME: '/Users/alice',
+        USER: 'alice',
+        GITHUB_TOKEN: 'ghp_secret_token_12345',
+        GH_TOKEN: 'ghp_secret_token_67890',
+        AWS_SECRET_ACCESS_KEY: 'aws_secret_key',
+        SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+        ANTHROPIC_API_KEY: 'sk-ant-test',
+        UNKNOWN_SECRET_KEY: 'sensitive_payload',
+      };
+
+      const sanitized = buildSanitizedEnvironment(mockHostEnv);
+
+      expect(sanitized.PATH).toBe('/usr/local/bin:/usr/bin');
+      expect(sanitized.HOME).toBe('/Users/alice');
+      expect(sanitized.USER).toBe('alice');
+      expect(sanitized.ANTHROPIC_API_KEY).toBe('sk-ant-test');
+      expect(sanitized.CI).toBe('1');
+      expect(sanitized.TERM).toBe('dumb');
+
+      // Credentials and secrets MUST be stripped
+      expect(sanitized.GITHUB_TOKEN).toBeUndefined();
+      expect(sanitized.GH_TOKEN).toBeUndefined();
+      expect(sanitized.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(sanitized.SSH_AUTH_SOCK).toBeUndefined();
+      expect(sanitized.UNKNOWN_SECRET_KEY).toBeUndefined();
     });
   });
 

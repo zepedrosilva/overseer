@@ -574,7 +574,7 @@ export function getAgentDefinition(agentName: string, data?: AppState, cwd?: str
       return { command: 'claude --dangerously-skip-permissions -p "{prompt}"', description: 'Claude CLI autonomous assistant' };
     case 'agy':
     case 'gemini':
-      return { command: 'agy --dangerously-skip-permissions -p "{prompt}"', description: 'Antigravity / Gemini CLI agent' };
+      return { command: 'agy --sandbox --dangerously-skip-permissions -p "{prompt}"', description: 'Antigravity / Gemini CLI agent' };
     case 'pi':
       return { command: 'pi "{prompt}"', description: 'Pi CLI agent' };
     default:

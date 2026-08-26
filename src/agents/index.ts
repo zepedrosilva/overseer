@@ -141,6 +141,47 @@ export function parseShellArgs(commandStr: string): { bin: string; args: string[
   return { bin, args };
 }
 
+export const ALLOWED_ENV_VARS = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SHELL',
+  'EDITOR',
+  'NODE_ENV',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'OPENAI_API_KEY',
+];
+
+export function buildSanitizedEnvironment(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {
+    CI: '1',
+    TERM: 'dumb',
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+  };
+
+  for (const key of ALLOWED_ENV_VARS) {
+    if (baseEnv[key] !== undefined) {
+      sanitized[key] = baseEnv[key];
+    }
+  }
+
+  return sanitized;
+}
+
 export function getSpawnExecution(
   agentName: string,
   commandStr: string,
@@ -152,7 +193,7 @@ export function getSpawnExecution(
     return { bin: 'claude', args: ['--dangerously-skip-permissions', '-p', promptText] };
   }
   if (norm === 'agy' || norm === 'gemini') {
-    return { bin: 'agy', args: ['--dangerously-skip-permissions', '-p', promptText] };
+    return { bin: 'agy', args: ['--sandbox', '--dangerously-skip-permissions', '-p', promptText] };
   }
   if (norm === 'pi') {
     return { bin: 'pi', args: [promptText] };
@@ -370,13 +411,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     cwd: worktreePath,
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      CI: '1',
-      TERM: 'dumb',
-      NO_COLOR: '1',
-      FORCE_COLOR: '0',
-    },
+    env: buildSanitizedEnvironment(process.env),
   });
 
   const worker: WorkerHandle = {
