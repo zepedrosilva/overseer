@@ -20,8 +20,11 @@ import type {
   HistoricalPrRecord,
   HistoricalStatsStore,
   MemberBackfillWatermark,
+  RepoPolicyConfig,
+  RepoPolicyMode,
 } from './types.js';
 import { prKeyToString } from './types.js';
+import { BUILTIN_PRESETS } from '../agents/presets.js';
 
 export const LOCAL_OVERSEER_DIR = '.overseer';
 export const STATE_FILE_NAME = 'state.json';
@@ -84,6 +87,7 @@ export function createEmptyState(
     settings,
     extensions: ext,
     repoAgents: {},
+    repoPolicies: {},
     customAgents: {},
     repos: [],
     prs: new Map<string, PrState>(),
@@ -112,6 +116,7 @@ export function saveSettings(data: AppState, customPath?: string, cwd: string = 
     settings: data.settings,
     extensions: data.extensions,
     repoAgents: data.repoAgents,
+    repoPolicies: data.repoPolicies,
   };
 
   fs.writeFileSync(filePath, JSON.stringify(serializable, null, 2), 'utf-8');
@@ -127,6 +132,7 @@ export function loadSettings(customPath?: string, cwd: string = process.cwd()): 
         settings: parsed.settings || {},
         extensions: parsed.extensions || {},
         repoAgents: parsed.repoAgents || {},
+        repoPolicies: parsed.repoPolicies || {},
       };
     } catch {
       return null;
@@ -242,10 +248,12 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
   };
 
   const repoAgents: Record<string, string> = { ...(settingsConfig?.repoAgents || {}) };
+  const repoPolicies: Record<string, RepoPolicyConfig> = { ...(settingsConfig?.repoPolicies || {}) };
 
   if (!stateExists) {
     const empty = createEmptyState(settings, extensions);
     empty.repoAgents = repoAgents;
+    empty.repoPolicies = repoPolicies;
     return empty;
   }
 
@@ -292,6 +300,21 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
     if (parsed.workers && typeof parsed.workers === 'object') {
       for (const [k, v] of Object.entries(parsed.workers as Record<string, WorkerHandle>)) {
         if (v && typeof v === 'object') {
+          if (v.status === 'running') {
+            let isAlive = false;
+            if (v.pid && typeof v.pid === 'number') {
+              try {
+                process.kill(v.pid, 0);
+                isAlive = true;
+              } catch {
+                isAlive = false;
+              }
+            }
+            if (!isAlive) {
+              v.status = 'interrupted';
+              v.error = 'Process interrupted on application restart';
+            }
+          }
           workers.set(k, v);
         }
       }
@@ -305,9 +328,12 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
     let historicalStats: HistoricalStatsStore = { records: [] };
     if (parsed.historicalStats && typeof parsed.historicalStats === 'object') {
       const histObj = parsed.historicalStats as Record<string, unknown>;
-      const records = Array.isArray(histObj.records)
-        ? (histObj.records as any[]).filter((r: any) => r && r.key && r.createdAt)
-        : [];
+      const rawRecords = Array.isArray(histObj.records) ? histObj.records : [];
+      const records = rawRecords.filter((r): r is HistoricalPrRecord => {
+        if (!r || typeof r !== 'object') return false;
+        const rec = r as Record<string, unknown>;
+        return Boolean(rec.key && rec.createdAt);
+      });
       const memberWatermarks = (histObj.memberWatermarks && typeof histObj.memberWatermarks === 'object')
         ? (histObj.memberWatermarks as Record<string, MemberBackfillWatermark>)
         : undefined;
@@ -321,6 +347,7 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       settings,
       extensions,
       repoAgents,
+      repoPolicies,
       customAgents,
       repos: Array.isArray(parsed.repos) ? parsed.repos : [],
       prs,
@@ -451,6 +478,55 @@ export function setRepoAgent(
   data.repoAgents[key] = agentName;
 }
 
+export function getRepoPolicy(
+  data: AppState,
+  repo: { owner: string; repo: string } | string
+): RepoPolicyConfig | null {
+  const key = typeof repo === 'string' ? repo.toLowerCase() : `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`;
+  if (data.repoPolicies && data.repoPolicies[key]) {
+    return data.repoPolicies[key];
+  }
+  if (data.repoPolicies && data.repoPolicies['*']) {
+    return data.repoPolicies['*'];
+  }
+  return null;
+}
+
+export function setRepoPolicy(
+  data: AppState,
+  repo: { owner: string; repo: string } | string,
+  policy: RepoPolicyConfig
+): void {
+  const key = typeof repo === 'string' ? repo.toLowerCase() : `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`;
+  if (!data.repoPolicies) {
+    data.repoPolicies = {};
+  }
+  data.repoPolicies[key] = policy;
+}
+
+export function getRepoMode(
+  data: AppState,
+  repo: { owner: string; repo: string } | string
+): RepoPolicyMode {
+  const policy = getRepoPolicy(data, repo);
+  return policy?.mode || 'off';
+}
+
+export function getRepoRoleAgent(
+  data: AppState,
+  repo: { owner: string; repo: string } | string,
+  role: 'reviewer' | 'fixer' | 'ciRepair'
+): string {
+  const policy = getRepoPolicy(data, repo);
+  if (policy?.agents?.[role]) {
+    return policy.agents[role]!;
+  }
+  if (policy?.agent) {
+    return policy.agent;
+  }
+  return getRepoAgent(data, repo);
+}
+
 export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile {
   const agentsPath = path.join(cwd, LOCAL_OVERSEER_DIR, AGENTS_FILE_NAME);
   if (!fs.existsSync(agentsPath)) {
@@ -460,6 +536,7 @@ export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile 
     const raw = fs.readFileSync(agentsPath, 'utf-8');
     const parsed = JSON.parse(raw);
     const custom = parsed.customAgents || (parsed.agents ? parsed.agents : undefined);
+    const customPlaybooks = parsed.customPlaybooks || (parsed.playbooks ? parsed.playbooks : undefined);
     const disabled = Array.isArray(parsed.disabledAgents)
       ? parsed.disabledAgents
       : Array.isArray(parsed.disabled)
@@ -467,6 +544,7 @@ export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile 
       : [];
     return {
       customAgents: custom,
+      customPlaybooks,
       disabledAgents: disabled,
     };
   } catch {
@@ -477,7 +555,7 @@ export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile 
 export function getAvailableAgents(data?: AppState, cwd?: string): string[] {
   const localConfig = loadAgentsConfig(cwd);
   const disabled = new Set(localConfig.disabledAgents || []);
-  const builtin = ['claude', 'agy', 'gemini', 'pi'].filter((a) => !disabled.has(a));
+  const builtin = Object.keys(BUILTIN_PRESETS).filter((a) => !disabled.has(a));
   const customFromState = data?.customAgents ? Object.keys(data.customAgents) : [];
   const customFromConfig = localConfig.customAgents ? Object.keys(localConfig.customAgents) : [];
   return Array.from(new Set([...builtin, ...customFromState, ...customFromConfig]));
@@ -494,20 +572,16 @@ export function getAgentDefinition(agentName: string, data?: AppState, cwd?: str
     return localConfig.customAgents[agentName];
   }
 
-  switch (norm) {
-    case 'claude':
-      return { command: 'claude -p "{prompt}"', description: 'Claude CLI autonomous assistant' };
-    case 'agy':
-    case 'gemini':
-      return { command: 'agy "{prompt}"', description: 'Antigravity / Gemini CLI agent' };
-    case 'pi':
-      return { command: 'pi "{prompt}"', description: 'Pi CLI agent' };
-    default:
-      return {
-        command: `${agentName} "{prompt}"`,
-        description: `Custom agent ${agentName}`,
-      };
+  if (BUILTIN_PRESETS[norm]) {
+    return BUILTIN_PRESETS[norm];
   }
+
+  return {
+    bin: agentName,
+    args: ['{prompt}'],
+    command: `${agentName} "{prompt}"`,
+    description: `Custom agent ${agentName}`,
+  };
 }
 
 export function appStateToAppConfig(data: AppState, cwd?: string): AppConfig {

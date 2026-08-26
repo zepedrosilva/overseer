@@ -1,7 +1,4 @@
-// ── PR Table View ───────────────────────────────────────────────────────────
-// Minimalist, high-contrast PR table with org dividers & reviewer status.
-
-import type { PrState, WorkerHandle } from '../app/types.js';
+import type { PrState, WorkerHandle, RepoPolicyConfig } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { formatReviewBadge } from '../watcher/evaluator.js';
 import {
@@ -23,6 +20,7 @@ export interface RenderTableOptions {
   scope?: 'mine' | 'team';
   currentUser?: string;
   workers?: Map<string, WorkerHandle>;
+  repoPolicies?: Record<string, RepoPolicyConfig>;
   teamProfiles?: Record<string, { login: string; name?: string }>;
   spinnerTick?: number;
 }
@@ -38,30 +36,30 @@ export function renderTable(options: RenderTableOptions): string[] {
   const safeWidth = Math.max(10, width - 2);
   const isTeam = scope === 'team';
 
-  // Responsive column width allocation
+  // Responsive column width allocation (repo column consistently set to 25)
   let revColWidth = 12;
-  let repoColWidth = 14;
+  let repoColWidth = 25;
   let branchColWidth = 15;
   let authorColWidth = isTeam ? 12 : 0;
 
   if (safeWidth < 60) {
     revColWidth = 5;
-    repoColWidth = 6;
+    repoColWidth = 12;
     branchColWidth = 6;
     authorColWidth = isTeam ? 6 : 0;
   } else if (safeWidth < 75) {
     revColWidth = 6;
-    repoColWidth = 8;
+    repoColWidth = 16;
     branchColWidth = 8;
     authorColWidth = isTeam ? 8 : 0;
   } else if (safeWidth < 95) {
     revColWidth = 8;
-    repoColWidth = 10;
+    repoColWidth = 20;
     branchColWidth = 10;
     authorColWidth = isTeam ? 10 : 0;
   } else if (safeWidth < 115) {
     revColWidth = 10;
-    repoColWidth = 12;
+    repoColWidth = 22;
     branchColWidth = 12;
     authorColWidth = isTeam ? 11 : 0;
   }
@@ -155,6 +153,7 @@ export function renderTable(options: RenderTableOptions): string[] {
       const icon = isUser ? '👤' : '🏢';
       const label = `── ${icon} ${item.owner} `;
       const badge = `(${item.count})`;
+
       const prefixVisualLen = visualLength(label) + visualLength(badge) + 2;
       const dashCount = Math.max(0, safeWidth - prefixVisualLen);
       const dashes = '─'.repeat(dashCount);
@@ -171,16 +170,21 @@ export function renderTable(options: RenderTableOptions): string[] {
     const marker = isSelected ? `\x1B[${rgbColor(colors.cyan)}▎\x1B[0m ` : '  ';
     const worker = options.workers?.get(prKeyToString(pr.key));
     const isWorkerRunning = worker?.status === 'running';
+    const isDryRunWorker = worker?.status === 'dry-run';
 
-    const sIcon = isWorkerRunning
-      ? getSpinnerChar(options.spinnerTick)
-      : statusIcon(pr.overallStatus);
-    const sName = isWorkerRunning
-      ? worker!.agentName.slice(0, 6).padEnd(6)
-      : pr.overallStatus.slice(0, 6).padEnd(6);
-    const sc = isWorkerRunning
-      ? rgbColor(colors.yellow)
-      : rgbColor(statusColor(pr.overallStatus));
+    let sIcon = statusIcon(pr.overallStatus);
+    let sName = pr.overallStatus.slice(0, 6).padEnd(6);
+    let sc = rgbColor(statusColor(pr.overallStatus));
+
+    if (isWorkerRunning) {
+      sIcon = getSpinnerChar(options.spinnerTick);
+      sName = worker!.agentName.slice(0, 6).padEnd(6);
+      sc = rgbColor(colors.yellow);
+    } else if (isDryRunWorker) {
+      sIcon = '🟡';
+      sName = 'DRY'.padEnd(6);
+      sc = rgbColor(colors.yellow);
+    }
     const cIcon = ciIcon(pr.ciStatus, options.spinnerTick);
     const cc = rgbColor(ciColor(pr.ciStatus));
 
@@ -192,13 +196,24 @@ export function renderTable(options: RenderTableOptions): string[] {
     else if (revBadge.kind === 'pending') revColorHex = colors.yellow;
 
     const revText = padEndVisual(truncateVisual(revBadge.text, revColWidth), revColWidth);
-    const repoName = truncateVisual(pr.key.repo, repoColWidth).padEnd(repoColWidth);
     const prNum = `#${pr.key.number}`.padEnd(6);
     const profile = options.teamProfiles?.[pr.author.toLowerCase()];
     const rawAuthor = profile?.name || pr.author;
     const authorName = isTeam ? truncateVisual(rawAuthor, authorColWidth).padEnd(authorColWidth) : '';
     const branch = truncateVisual(pr.branch, branchColWidth).padEnd(branchColWidth);
-    const title = truncateVisual(pr.title, titleWidth).padEnd(titleWidth);
+
+    // Check Repo Policy Mode indicator (🟢 LIVE / 🟡 DRY-RUN / ⚪ OFF)
+    const repoKey = `${pr.key.owner}/${pr.key.repo}`.toLowerCase();
+    const repoPolicy = options.repoPolicies?.[repoKey] || options.repoPolicies?.['*'];
+    const repoMode = repoPolicy?.mode || 'off';
+    const modeDot =
+      repoMode === 'live'
+        ? `\x1B[${rgbColor(colors.green)}●\x1B[0m `
+        : repoMode === 'dry-run'
+        ? `\x1B[${rgbColor(colors.yellow)}○\x1B[0m `
+        : '';
+    const modeDotLen = modeDot ? 2 : 0;
+    const availableRepoWidth = Math.max(2, repoColWidth - modeDotLen);
 
     const isCompleted =
       pr.overallStatus === 'Merged' ||
@@ -214,11 +229,11 @@ export function renderTable(options: RenderTableOptions): string[] {
     const bgPrefix = isSelected ? `\x1B[48;2;30;41;59m` : '';
     const bgReset = isSelected ? `\x1B[0m` : '';
 
-    const repoPart = `\x1B[${rgbColor(colors.fg)}${repoName}\x1B[0m`;
+    const repoPart = `${modeDot}\x1B[${rgbColor(colors.fg)}${truncateVisual(pr.key.repo, availableRepoWidth).padEnd(availableRepoWidth)}\x1B[0m`;
     const numPart = `\x1B[${rgbColor(colors.fg)}${prNum}\x1B[0m`;
     const authorPart = isTeam ? `\x1B[${rgbColor(colors.cyan)}${authorName}\x1B[0m ` : '';
     const branchPart = `\x1B[${rgbColor(branchColor)}${branch}\x1B[0m`;
-    const titlePart = `\x1B[${rgbColor(titleColor)}${title}\x1B[0m`;
+    const titlePart = `\x1B[${rgbColor(titleColor)}${truncateVisual(pr.title, titleWidth).padEnd(titleWidth)}\x1B[0m`;
     const statusPart = `\x1B[${sc}${sIcon} ${sName}\x1B[0m`;
     const ciPart = `\x1B[${cc}${cIcon} \x1B[0m`;
     const revPart = `\x1B[${rgbColor(revColorHex)}${revText}\x1B[0m`;

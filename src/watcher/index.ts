@@ -6,8 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AppState, AppConfig, RepoHandle, PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
+import { upsertPR, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
 import { runGraphQL, fetchTeamMembers, fetchTeamMemberProfiles, checkRateLimit } from './gh.js';
+import { evaluateAutonomousPolicies } from './autonomous.js';
 import {
   buildBatchPRQuery,
   parseGraphQLBatchResponse,
@@ -95,11 +96,17 @@ async function fetchChunkPrs(
   }
 }
 
+let isPollInFlight = false;
+
 export async function pollAllRepos(
   data: AppState,
   config: AppConfig,
   scope: 'all' | 'mine' | 'team' = 'all'
 ): Promise<void> {
+  if (isPollInFlight) {
+    return;
+  }
+
   // 1. Check if we are currently rate-limited by GitHub API
   if (data.rateLimitedUntil) {
     if (Date.now() < data.rateLimitedUntil) {
@@ -109,6 +116,7 @@ export async function pollAllRepos(
     data.rateLimitedUntil = undefined;
   }
 
+  isPollInFlight = true;
   data.isPolling = true;
 
   const filterOptions: ParseGraphQLBatchOptions = {
@@ -401,7 +409,15 @@ export async function pollAllRepos(
         }
       }
     }
+
+    // Evaluate autonomous delegation policies on active PRs (runs for all modes)
+    try {
+      await evaluateAutonomousPolicies(data, config);
+    } catch (err) {
+      logWatcherMessage(`Autonomous policy evaluation error: ${(err as Error).message}`);
+    }
   } finally {
+    isPollInFlight = false;
     data.isPolling = false;
     data.lastPolled = Date.now();
     saveState(data);

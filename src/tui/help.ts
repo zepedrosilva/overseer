@@ -46,10 +46,8 @@ export function renderHelpModal(options: RenderHelpModalOptions): string[] {
 
   // 1. Navigation & Scope
   addLine(`\x1B[1;37m🧭 Navigation & Scope\x1B[0m`);
-  renderKeyRow('↑ / k', 'Move selection up');
-  renderKeyRow('↓ / j', 'Move selection down');
-  renderKeyRow('Tab / t', 'Toggle monitoring scope between Mine and Team');
-  renderKeyRow('1 / 2', 'Select scope directly: [1] Mine  [2] Team');
+  renderKeyRow('↑/↓ (k/j)', 'Move selection up / down');
+  renderKeyRow('Tab / t', 'Toggle monitoring scope: [1] Mine  [2] Team');
   renderKeyRow('/ or f', 'Search / filter PRs by title, repo, author, or branch');
   addDivider();
 
@@ -65,16 +63,17 @@ export function renderHelpModal(options: RenderHelpModalOptions): string[] {
   addDivider();
 
   // 3. AI Agents & Automation
-  addLine(`\x1B[1;37m🤖 AI Agents & Background Worktrees\x1B[0m`);
-  renderKeyRow('a', 'Dispatch AI agent in isolated worktree with custom prompt');
+  addLine(`\x1B[1;37m🤖 AI Agents & Automation\x1B[0m`);
+  renderKeyRow('a', 'Dispatch AI agent / playbook (ci-repair, address-comments, etc.)');
+  renderKeyRow('C / X / K', 'Cancel active agent worker process for selected PR');
   renderKeyRow('L / l', 'View live streaming or historical agent execution logs');
   addDivider();
 
   // 4. Performance & Config
   addLine(`\x1B[1;37m📊 Performance & Configuration\x1B[0m`);
-  renderKeyRow('p', 'Open PR Stats & Leaderboard dashboard (7d-90d trailing metrics & trends)');
+  renderKeyRow('p', 'Open PR Stats & Velocity dashboard (press [a] inside for Agent Telemetry)');
   renderKeyRow('b / B', 'Trigger PR backfill: [b] incremental (cached)  [B] force refresh');
-  renderKeyRow('s', 'Settings & Extensions modal (team, default agent, Local API)');
+  renderKeyRow('s', 'Settings modal (defaults, team, polling intervals, dry-run, Local API)');
   renderKeyRow('? / h', 'Show this All Actions & Keybindings modal');
   renderKeyRow('q', 'Quit Overseer');
 

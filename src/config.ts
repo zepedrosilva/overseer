@@ -10,7 +10,6 @@ import {
   createEmptyState,
   appStateToAppConfig,
   getAgentDefinition as getAgentDefFromState,
-  getRepoAgent as getRepoAgentFromState,
 } from './app/state.js';
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -36,24 +35,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
 };
 
-export const BUILTIN_AGENT_PRESETS: Record<string, AgentDefinition> = {
-  claude: {
-    command: 'claude -p "Review and address the comments on PR #{pr}"',
-    description: 'Claude CLI code assistant',
-  },
-  gemini: {
-    command: 'agy "Review and fix issues on PR #{pr}"',
-    description: 'Antigravity / Gemini CLI agent',
-  },
-  agy: {
-    command: 'agy "Review and fix issues on PR #{pr}"',
-    description: 'Antigravity CLI agent',
-  },
-  pi: {
-    command: 'pi "Review PR #{pr}"',
-    description: 'Pi CLI agent',
-  },
-};
+import { BUILTIN_PRESETS } from './agents/presets.js';
+
+export const BUILTIN_AGENT_PRESETS: Record<string, AgentDefinition> = BUILTIN_PRESETS;
+
 
 export interface LoadConfigOptions {
   configPath?: string;

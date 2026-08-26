@@ -18,6 +18,7 @@ import { renderHelpModal } from '../src/tui/help.js';
 import { renderDiffModal } from '../src/tui/diff.js';
 import { renderLogsModal } from '../src/tui/logs.js';
 import { renderFooter } from '../src/tui/footer.js';
+import { renderAgentModal } from '../src/tui/agentModal.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import { calculateStats } from '../src/stats/index.js';
 import type { PrState } from '../src/app/types.js';
@@ -368,7 +369,7 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('All Actions & Keybindings');
       expect(fullText).toContain('Navigation & Scope');
       expect(fullText).toContain('PR Triage & Operations');
-      expect(fullText).toContain('AI Agents & Background Worktrees');
+      expect(fullText).toContain('AI Agents & Automation');
       expect(fullText).toContain('Performance & Configuration');
       expect(fullText).toContain('[? / h]');
       expect(fullText).toContain('[b / B]');
@@ -425,7 +426,7 @@ describe('TUI Components & Engine', () => {
         inputBuffer: 'fix typos',
         selectedAgent: 'agy',
       }, 100);
-      expect(stripAnsi(agentFooter)).toContain('Agent [agy] prompt: fix typos');
+      expect(stripAnsi(agentFooter)).toContain('Custom prompt [agy]: fix typos');
     });
 
     it('renders 2-step agent selector footer with available agent badges', () => {
@@ -438,11 +439,29 @@ describe('TUI Components & Engine', () => {
         availableAgents: ['claude', 'agy', 'gemini', 'pi'],
       }, 100);
       const text = stripAnsi(selectFooter);
-      expect(text).toContain('Agent for web-frontend:');
+      expect(text).toContain('acme-corp/web-frontend:');
       expect(text).toContain('[1] claude');
       expect(text).toContain('[2] agy');
       expect(text).toContain('[3] gemini');
-      expect(text).toContain('[Enter] accept');
+      expect(text).toContain('Mode:');
+      expect(text).toContain('[Enter] select playbook');
+    });
+
+    it('renders playbook preset selector footer with preset badges', () => {
+      const pr = createMockPR(142);
+      const selectFooter = renderFooter({
+        mode: 'PLAYBOOK_SELECT',
+        selectedPR: pr,
+        inputBuffer: '',
+        selectedPlaybookIndex: 0,
+        availablePlaybooks: ['preflight-review', 'ci-repair', 'address-comments', 'rebase-resolver', 'custom...'],
+      }, 120);
+      const text = stripAnsi(selectFooter);
+      expect(text).toContain('Playbook for #142:');
+      expect(text).toContain('[1] preflight-review');
+      expect(text).toContain('[2] ci-repair');
+      expect(text).toContain('[5] custom...');
+      expect(text).toContain('[Enter] dispatch');
     });
   });
 
@@ -468,6 +487,27 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('[LOCAL API]');
       expect(fullText).toContain('Local API Server');
       expect(fullText).toContain('[Esc to save & close]');
+    });
+  });
+
+  describe('Agent & Automation Modal', () => {
+    it('renders agent modal with policy mode, multi-agent roles, and playbooks', () => {
+      const state = createEmptyState();
+      const pr = createMockPR(15);
+      const lines = renderAgentModal(state, pr, { selectedIndex: 0 }, 90, 24);
+
+      const fullText = lines.map(stripAnsi).join('\n');
+      expect(fullText).toContain('Agent & Automation Config: acme-corp/web-frontend #15');
+      expect(fullText).toContain('REPOSITORY AUTOMATION POLICY');
+      expect(fullText).toContain('Reviewer Agent:');
+      expect(fullText).toContain('Fixer Agent:');
+      expect(fullText).toContain('CI Repair Agent:');
+      expect(fullText).toContain('ON-DEMAND PLAYBOOK DISPATCH');
+      expect(fullText).toContain('Pre-flight Code Review');
+      expect(fullText).toContain('CI Failure Auto-Repair');
+      expect(fullText).toContain('Address Review Comments');
+      expect(fullText).toContain('Rebase & Conflict Resolver');
+      expect(fullText).toContain('[Esc] Close');
     });
   });
 
@@ -595,6 +635,19 @@ describe('TUI Components & Engine', () => {
         scrollOffset: 0,
       });
       testModalGeometry('LogsModal', lines, 94, 18);
+    });
+
+    it('validates 8. Agent & Automation Modal frame trace across various screen widths', () => {
+      for (const width of [60, 75, 84, 100, 120]) {
+        const lines = renderAgentModal({
+          data: state,
+          selectedPR: pr,
+          modalState: { selectedIndex: 0 },
+          modalWidth: width,
+          modalHeight: 20,
+        });
+        testModalGeometry(`AgentModal (${width}w)`, lines, width, 20);
+      }
     });
   });
 });

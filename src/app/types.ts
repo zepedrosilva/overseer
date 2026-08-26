@@ -133,15 +133,32 @@ export interface RepoHandle {
   discovered?: boolean;
 }
 
-// ── Agent Configuration ─────────────────────────────────────────────────────
+// ── Agent Configuration & Playbooks ─────────────────────────────────────────
+
+export type AgentDriverType = 'local' | 'remote';
 
 export interface AgentDefinition {
-  command: string;
+  command?: string;
+  bin?: string;
+  args?: string[];
   description?: string;
+  driver?: AgentDriverType;
+  triggerTemplate?: string;
+}
+
+export interface PlaybookDefinition {
+  name: string;
+  description: string;
+  promptTemplate: string;
+  includeCiLogs?: boolean;
+  includeReviewComments?: boolean;
+  includeDiff?: boolean;
+  readOnly?: boolean;
 }
 
 export interface AgentsConfigFile {
   customAgents?: Record<string, AgentDefinition>;
+  customPlaybooks?: Record<string, PlaybookDefinition>;
   disabledAgents?: string[];
 }
 
@@ -159,6 +176,9 @@ export interface WorkerHandle {
   sessionId: string;
   prKey: PrKey;
   agentName: string;
+  playbookName?: string;
+  driver?: AgentDriverType;
+  mode?: 'live' | 'dry-run';
   command: string;
   worktreePath: string;
   originalPrompt?: string;
@@ -167,10 +187,94 @@ export interface WorkerHandle {
   finishedAt?: number;
   pid?: number;
   logPath?: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
+  error?: string;
 }
 
-// ── Application Settings & Extensions ────────────────────────────────────────
+// ── Agent Telemetry & Analytics Models ──────────────────────────────────────
+
+export interface AgentExecutionRecord {
+  sessionId: string;
+  prKey: PrKey;
+  agentName: string;
+  playbookName: string;
+  driver: AgentDriverType;
+  mode: 'live' | 'dry-run';
+  trigger: 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api';
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
+  exitCode?: number;
+  signal?: string;
+  error?: string;
+  summary?: string;
+}
+
+export interface AgentStatsStore {
+  records: AgentExecutionRecord[];
+}
+
+export interface AgentAggregatedStats {
+  totalRuns: number;
+  successRate: number;
+  avgDurationMs: number;
+  dryRunsCount: number;
+  byAgent: Record<
+    string,
+    {
+      runs: number;
+      successCount: number;
+      failedCount: number;
+      successRate: number;
+      avgDurationMs: number;
+      topPlaybook?: string;
+    }
+  >;
+  byPlaybook: Record<
+    string,
+    {
+      runs: number;
+      successCount: number;
+      failedCount: number;
+      successRate: number;
+      avgDurationMs: number;
+      topRepo?: string;
+    }
+  >;
+  byRepo: Record<
+    string,
+    {
+      runs: number;
+      autoRuns: number;
+      manualRuns: number;
+      successCount: number;
+      failedCount: number;
+      successRate: number;
+      mode: RepoPolicyMode;
+      defaultAgent: string;
+    }
+  >;
+  recentAuditTrail: AgentExecutionRecord[];
+}
+
+// ── Application Settings & Repo Policies ────────────────────────────────────
+
+export type RepoPolicyMode = 'off' | 'dry-run' | 'live';
+
+export interface RepoPolicyAgents {
+  reviewer?: string;
+  fixer?: string;
+  ciRepair?: string;
+}
+
+export interface RepoPolicyConfig {
+  mode?: RepoPolicyMode;
+  agent?: string;
+  agents?: RepoPolicyAgents;
+  triggers?: ('CiFailing' | 'ChangesRequested' | 'Reviewing')[];
+  allowedPlaybooks?: string[];
+}
 
 export interface AppSettings {
   defaultAgent: string;
@@ -199,6 +303,7 @@ export interface SettingsConfigFile {
   settings?: Partial<AppSettings>;
   extensions?: Partial<AppExtensions>;
   repoAgents?: Record<string, string>;
+  repoPolicies?: Record<string, RepoPolicyConfig>;
 }
 
 // ── Historical PR & Stats Records ──────────────────────────────────────────
@@ -345,6 +450,7 @@ export interface AppState {
   settings: AppSettings;
   extensions: AppExtensions;
   repoAgents: Record<string, string>; // key: "owner/repo" in lowercase -> agentName
+  repoPolicies: Record<string, RepoPolicyConfig>; // key: "owner/repo" in lowercase -> policy
   customAgents: Record<string, AgentDefinition>; // custom agent templates
   repos: RepoHandle[];
   prs: Map<string, PrState>; // key: prKeyToString(key)
@@ -457,5 +563,15 @@ export type ApiActionType =
 
 export type ApiActionHandler = (
   action: ApiActionType,
-  payload: { id?: string; pr?: PrState | null; prompt?: string; comment?: string }
+  payload: {
+    id?: string;
+    pr?: PrState | null;
+    prompt?: string;
+    comment?: string;
+    text?: string;
+    agentName?: string;
+    playbookName?: string;
+    trigger?: 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api';
+    source?: 'tui' | 'api';
+  }
 ) => void | Promise<void>;

@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { PrState, WorkerHandle } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { colors, rgbColor, getSpinnerChar } from './colors.js';
-import { padEndVisual, truncateVisual, visualLength, formatTimeAgo } from './layout.js';
+import { padEndVisual, truncateVisual, visualLength } from './layout.js';
 
 export interface RenderLogsModalOptions {
   pr: PrState;

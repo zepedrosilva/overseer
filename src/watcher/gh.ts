@@ -443,3 +443,215 @@ export async function fetchTeamMemberProfiles(
 
   return profiles;
 }
+
+// ── Autonomous Context Extractors ──────────────────────────────────────────
+
+export async function fetchFailedCiLogs(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  try {
+    const { stdout: checksOut } = await execFileAsync('gh', [
+      'pr',
+      'checks',
+      String(number),
+      '--repo',
+      `${owner}/${repo}`,
+      '--json',
+      'name,state,bucket,description,link',
+    ]);
+    const checks = JSON.parse(checksOut) as Array<{
+      name: string;
+      state: string;
+      bucket: string;
+      description?: string;
+      link?: string;
+    }>;
+
+    const failed = checks.filter(
+      (c) => c.bucket === 'fail' || c.state === 'FAILURE' || c.state === 'TIMED_OUT'
+    );
+
+    if (failed.length === 0) {
+      return 'No specific failed check runs detected.';
+    }
+
+    const lines: string[] = [];
+    for (const f of failed) {
+      lines.push(`- Check: ${f.name} (Status: ${f.state})`);
+      if (f.description) lines.push(`  Description: ${f.description}`);
+      if (f.link) lines.push(`  Log Link: ${f.link}`);
+    }
+
+    return lines.join('\n');
+  } catch (err) {
+    return `Unable to fetch detailed CI logs: ${(err as Error).message}`;
+  }
+}
+
+export async function fetchUnresolvedReviewComments(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  const query = `
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 30) {
+            nodes {
+              isResolved
+              path
+              line
+              comments(first: 10) {
+                nodes {
+                  author { login }
+                  body
+                  createdAt
+                }
+              }
+            }
+          }
+          reviews(last: 10) {
+            nodes {
+              author { login }
+              body
+              state
+              submittedAt
+            }
+          }
+          comments(last: 10) {
+            nodes {
+              author { login }
+              body
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const res = await runGraphQL<{
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: {
+              nodes?: Array<{
+                isResolved: boolean;
+                path: string;
+                line?: number;
+                comments?: {
+                  nodes?: Array<{
+                    author?: { login: string };
+                    body: string;
+                    createdAt: string;
+                  }>;
+                };
+              }>;
+            };
+            reviews?: {
+              nodes?: Array<{
+                author?: { login: string };
+                body?: string;
+                state: string;
+                submittedAt?: string;
+              }>;
+            };
+            comments?: {
+              nodes?: Array<{
+                author?: { login: string };
+                body?: string;
+                createdAt: string;
+              }>;
+            };
+          };
+        };
+      };
+    }>(query, { owner, repo, number });
+
+    const prData = res?.data?.repository?.pullRequest;
+    const threads = prData?.reviewThreads?.nodes || [];
+    const unresolvedThreads = threads.filter((t) => !t.isResolved);
+    const reviews = (prData?.reviews?.nodes || []).filter((r) => r.body && r.body.trim().length > 0);
+    const issueComments = (prData?.comments?.nodes || []).filter((c) => c.body && c.body.trim().length > 0);
+
+    const sections: string[] = [];
+
+    // 1. Format Unresolved Inline Code Threads
+    if (unresolvedThreads.length > 0) {
+      sections.push('### Inline Code Review Threads');
+      for (let i = 0; i < unresolvedThreads.length; i++) {
+        const t = unresolvedThreads[i];
+        const comments = t.comments?.nodes || [];
+        const location = t.line ? `${t.path}:${t.line}` : t.path;
+        sections.push(`--- Thread #${i + 1} at ${location} ---`);
+        for (const c of comments) {
+          const author = c.author?.login || 'reviewer';
+          sections.push(`@${author}: ${c.body.trim()}`);
+        }
+      }
+    }
+
+    // 2. Format Review Summaries
+    if (reviews.length > 0) {
+      sections.push('### Pull Request Reviews');
+      for (const r of reviews) {
+        const author = r.author?.login || 'reviewer';
+        sections.push(`[${r.state}] @${author}:\n${r.body?.trim()}`);
+      }
+    }
+
+    // 3. Format Discussion Comments (if no review threads or reviews found)
+    if (sections.length === 0 && issueComments.length > 0) {
+      sections.push('### Review & Discussion Comments');
+      for (const c of issueComments) {
+        const author = c.author?.login || 'commenter';
+        sections.push(`@${author}:\n${c.body?.trim()}`);
+      }
+    }
+
+    if (sections.length === 0) {
+      return 'No unresolved review comments or feedback found.';
+    }
+
+    return sections.join('\n\n');
+  } catch (err) {
+    return `Unable to fetch review comments: ${(err as Error).message}`;
+  }
+}
+
+export async function fetchPrDiffSummary(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('gh', [
+      'pr',
+      'view',
+      String(number),
+      '--repo',
+      `${owner}/${repo}`,
+      '--json',
+      'files,additions,deletions',
+    ]);
+    const parsed = JSON.parse(stdout) as {
+      additions?: number;
+      deletions?: number;
+      files?: { path: string; additions: number; deletions: number; changeType: string }[];
+    };
+    const fileList = (parsed.files || [])
+      .slice(0, 15)
+      .map((f) => `  • ${f.path} (+${f.additions}, -${f.deletions})`)
+      .join('\n');
+    const remainingCount = (parsed.files?.length || 0) - 15;
+    const remainingStr = remainingCount > 0 ? `\n  • ... and ${remainingCount} more files` : '';
+
+    return `Total Volume: +${parsed.additions || 0} lines, -${parsed.deletions || 0} lines across ${parsed.files?.length || 0} files:\n${fileList}${remainingStr}`;
+  } catch (err) {
+    return `Unable to fetch diff summary: ${(err as Error).message}`;
+  }
+}

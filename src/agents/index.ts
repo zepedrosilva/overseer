@@ -1,9 +1,13 @@
 // ── Agent Registry & Dispatcher ──────────────────────────────────────────────
-// Manages agent definitions, template interpolation, and worktree process execution.
+// Manages agent definitions, playbook interpolation, local worktree processes,
+// remote bot comment dispatching, and durable telemetry recording.
 
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
+
+const execFileAsync = promisify(execFile);
 import type {
   AppState,
   PrState,
@@ -11,10 +15,12 @@ import type {
   AppConfig,
   WorkerHandle,
   AgentDefinition,
+  AgentDriverType,
+  AgentExecutionRecord,
 } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { getAgentDefinition } from '../config.js';
-import { appendLog, setWorker, saveState, getRepoAgent } from '../app/state.js';
+import { appendLog, setWorker, saveState, getRepoAgent, getRepoMode, loadAgentsConfig } from '../app/state.js';
 import {
   resolveWorktreeDir,
   provisionWorktree,
@@ -24,15 +30,39 @@ import {
   cleanupPRArtifacts,
 } from './worktree.js';
 import { DEFAULT_AGENT_PROMPT } from './presets.js';
+import { getPlaybookDefinition } from './playbooks.js';
+import { recordAgentExecution } from './stats.js';
+import {
+  addComment,
+  fetchFailedCiLogs,
+  fetchUnresolvedReviewComments,
+  fetchPrDiffSummary,
+} from '../watcher/gh.js';
 
 export interface CommandInterpolationParams {
   pr: number;
   branch: string;
+  baseBranch?: string;
   owner: string;
   repo: string;
   url: string;
   worktree?: string;
   prompt?: string;
+  ciLogs?: string;
+  comments?: string;
+  diffSummary?: string;
+  failingCheck?: string;
+  playbook?: string;
+}
+
+const MAX_CONTEXT_LENGTH = 64 * 1024; // 64 KB cap per context snippet to avoid E2BIG on argv
+
+function sanitizeContextSnippet(str?: string, fallback: string = ''): string {
+  if (!str) return fallback;
+  if (str.length > MAX_CONTEXT_LENGTH) {
+    return str.slice(0, MAX_CONTEXT_LENGTH) + '\n... (truncated context)';
+  }
+  return str;
 }
 
 export function interpolateAgentCommand(
@@ -40,15 +70,26 @@ export function interpolateAgentCommand(
   params: CommandInterpolationParams
 ): string {
   const defaultPrompt = params.prompt || DEFAULT_AGENT_PROMPT;
+  const map: Record<string, string> = {
+    pr: String(params.pr),
+    branch: params.branch,
+    baseBranch: params.baseBranch || 'main',
+    owner: params.owner,
+    repo: params.repo,
+    url: params.url,
+    worktree: params.worktree || '',
+    ciLogs: sanitizeContextSnippet(params.ciLogs, 'No CI logs provided.'),
+    comments: sanitizeContextSnippet(params.comments, 'No unresolved comments.'),
+    diffSummary: sanitizeContextSnippet(params.diffSummary, 'No diff summary provided.'),
+    failingCheck: params.failingCheck || 'test',
+    playbook: params.playbook || 'custom',
+    prompt: defaultPrompt,
+  };
 
-  return template
-    .replace(/\{pr\}/g, String(params.pr))
-    .replace(/\{branch\}/g, params.branch)
-    .replace(/\{owner\}/g, params.owner)
-    .replace(/\{repo\}/g, params.repo)
-    .replace(/\{url\}/g, params.url)
-    .replace(/\{worktree\}/g, params.worktree || '')
-    .replace(/\{prompt\}/g, defaultPrompt);
+  // Single-pass function replacer prevents cascading expansion and ignores $ sequences
+  return template.replace(/\{(\w+)\}/g, (match, key) => {
+    return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : match;
+  });
 }
 
 export function buildAgentCommand(
@@ -56,20 +97,35 @@ export function buildAgentCommand(
   pr: PrState,
   config: AppConfig,
   worktreePath?: string,
-  prompt?: string
-): { command: string; definition: AgentDefinition } {
+  prompt?: string,
+  context?: Partial<CommandInterpolationParams>
+): { command: string; definition: AgentDefinition; promptText: string } {
   const definition = getAgentDefinition(agentName, config);
-  const command = interpolateAgentCommand(definition.command, {
+  const promptText = interpolateAgentCommand(prompt || DEFAULT_AGENT_PROMPT, {
     pr: pr.key.number,
     branch: pr.branch,
+    baseBranch: pr.baseBranch,
     owner: pr.key.owner,
     repo: pr.key.repo,
     url: pr.url,
     worktree: worktreePath,
-    prompt,
+    ...context,
   });
 
-  return { command, definition };
+  const cmdTemplate = definition.command || `${agentName} "{prompt}"`;
+  const command = interpolateAgentCommand(cmdTemplate, {
+    pr: pr.key.number,
+    branch: pr.branch,
+    baseBranch: pr.baseBranch,
+    owner: pr.key.owner,
+    repo: pr.key.repo,
+    url: pr.url,
+    worktree: worktreePath,
+    prompt: promptText,
+    ...context,
+  });
+
+  return { command, definition, promptText };
 }
 
 export interface DispatchOptions {
@@ -77,30 +133,199 @@ export interface DispatchOptions {
   pr: PrState;
   config: AppConfig;
   agentName?: string;
+  playbookName?: string;
   prompt?: string;
+  mode?: 'live' | 'dry-run';
+  trigger?: 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api';
+  ciLogs?: string;
+  comments?: string;
+  diffSummary?: string;
+  failingCheck?: string;
   cwd?: string;
 }
 
-export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHandle> {
-  const { data, pr, config, prompt, cwd } = options;
-  const agentName = options.agentName || (pr ? getRepoAgent(data, pr.key) : config.defaults.agent);
-  const sessionId = crypto.randomUUID();
+export function parseShellArgs(commandStr: string): { bin: string; args: string[] } {
+  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+  const tokens: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(commandStr)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1]);
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2]);
+    } else {
+      tokens.push(match[0]);
+    }
+  }
+  const bin = tokens[0] || 'echo';
+  const args = tokens.slice(1);
+  return { bin, args };
+}
 
-  // 1. Resolve & Provision Worktree
-  const worktreePath = resolveWorktreeDir(config, pr, cwd);
-  appendLog(data, pr.key, `Provisioning worktree at ${worktreePath}...`);
+export const ALLOWED_ENV_VARS = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SHELL',
+  'EDITOR',
+  'NODE_ENV',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'OPENAI_API_KEY',
+];
 
-  try {
-    await provisionWorktree(pr, worktreePath);
-  } catch (err) {
-    appendLog(data, pr.key, `Worktree provisioning note: ${(err as Error).message}`);
+export function buildSanitizedEnvironment(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {
+    CI: '1',
+    TERM: 'dumb',
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+  };
+
+  for (const key of ALLOWED_ENV_VARS) {
+    if (baseEnv[key] !== undefined) {
+      sanitized[key] = baseEnv[key];
+    }
   }
 
-  // 2. Build command string
-  const { command } = buildAgentCommand(agentName, pr, config, worktreePath, prompt);
+  return sanitized;
+}
 
-  // 3. Prepare Log File
-  const logDir = path.join(path.dirname(worktreePath), '..', 'logs');
+export function getSpawnExecution(
+  agentName: string,
+  commandStr: string,
+  promptText: string,
+  definition: AgentDefinition
+): { bin: string; args: string[] } {
+  const norm = agentName.toLowerCase();
+  if (norm === 'claude') {
+    return { bin: 'claude', args: ['--dangerously-skip-permissions', '-p', promptText] };
+  }
+  if (norm === 'agy' || norm === 'gemini') {
+    return { bin: 'agy', args: ['--sandbox', '--dangerously-skip-permissions', '--add-dir', '.', '--print-timeout', '20m', '-p', promptText] };
+  }
+  if (norm === 'pi') {
+    return { bin: 'pi', args: [promptText] };
+  }
+
+  if (definition.bin && definition.args) {
+    const interpolatedArgs = definition.args.map((arg) =>
+      arg.replace(/\{prompt\}/g, () => promptText)
+    );
+    return { bin: definition.bin, args: interpolatedArgs };
+  }
+
+  return parseShellArgs(commandStr);
+}
+
+export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHandle> {
+  const { data, pr, config, cwd } = options;
+  const agentName = options.agentName || (pr ? getRepoAgent(data, pr.key) : config.defaults.agent);
+  const playbookName = options.playbookName || 'custom';
+  const trigger = options.trigger || 'manual';
+  const sessionId = crypto.randomUUID();
+  const startTime = Date.now();
+  const startTimeIso = new Date(startTime).toISOString();
+
+  // Reject dispatch if a worker process is already actively running on this PR
+  const keyStr = prKeyToString(pr.key);
+  const existingWorker = data.workers.get(keyStr);
+  if (existingWorker && existingWorker.status === 'running') {
+    let isAlive = false;
+    if (existingWorker.pid) {
+      try {
+        process.kill(existingWorker.pid, 0);
+        isAlive = true;
+      } catch {
+        isAlive = false;
+      }
+    }
+    if (isAlive) {
+      throw new Error(`A worker process is already running for PR #${pr.key.number}`);
+    }
+  }
+
+  // Determine effective mode: global dryRun always takes precedence over live
+  const repoMode = getRepoMode(data, pr.key);
+  const isDryRun = Boolean(
+    data.dryRun ||
+    data.settings?.dryRun ||
+    options.mode === 'dry-run' ||
+    (options.mode === undefined && repoMode === 'dry-run')
+  );
+
+  // 1. Resolve Playbook & Injected Context
+  const agentsConfig = loadAgentsConfig(cwd);
+  const playbookDef = getPlaybookDefinition(playbookName, agentsConfig);
+
+  let ciLogs = options.ciLogs;
+  let comments = options.comments;
+  let diffSummary = options.diffSummary;
+  let failingCheck = options.failingCheck;
+
+  // Context injection for playbooks (runs for both manual and autonomous dispatch)
+  if (playbookDef.includeCiLogs && !ciLogs) {
+    try {
+      ciLogs = await fetchFailedCiLogs(pr.key.owner, pr.key.repo, pr.key.number);
+    } catch {
+      ciLogs = 'CI failure detected.';
+    }
+    if (!failingCheck) {
+      failingCheck = pr.ciChecks?.find((c) => c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT')?.name || 'test';
+    }
+  }
+
+  if (playbookDef.includeReviewComments && !comments) {
+    try {
+      comments = await fetchUnresolvedReviewComments(pr.key.owner, pr.key.repo, pr.key.number);
+    } catch {
+      comments = 'Reviewers provided comments and feedback.';
+    }
+  }
+
+  if (playbookDef.includeDiff && !diffSummary) {
+    try {
+      diffSummary = await fetchPrDiffSummary(pr.key.owner, pr.key.repo, pr.key.number);
+    } catch {
+      diffSummary = `Changed files: ${pr.changedFiles || 0} (+${pr.additions || 0}, -${pr.deletions || 0})`;
+    }
+  }
+
+  const basePrompt = options.prompt || playbookDef.promptTemplate;
+  const worktreePath = resolveWorktreeDir(config, pr, agentName, playbookName, cwd);
+
+  const { command, definition, promptText } = buildAgentCommand(
+    agentName,
+    pr,
+    config,
+    worktreePath,
+    basePrompt,
+    {
+      ciLogs,
+      comments,
+      diffSummary,
+      failingCheck,
+      playbook: playbookName,
+    }
+  );
+
+  const driver: AgentDriverType = definition.driver || 'local';
+
+  // 2. Prepare Log File
+  const logFile = resolveLogPath(pr, cwd);
+  const logDir = path.dirname(logFile);
   try {
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
@@ -109,7 +334,6 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     // Ignore if already created
   }
 
-  const logFile = path.join(logDir, `${pr.key.owner}-${pr.key.repo}-${pr.key.number}.log`);
   let logStream: fs.WriteStream | null = null;
   try {
     logStream = fs.createWriteStream(logFile, { flags: 'a' });
@@ -120,44 +344,250 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     logStream = null;
   }
 
-  appendLog(data, pr.key, `Dispatching agent '${agentName}'...`);
+  // ── Handle DRY-RUN Simulation ───────────────────────────────────────────────
+  if (isDryRun) {
+    appendLog(data, pr.key, `[DRY-RUN] Would dispatch ${driver} agent '${agentName}' (${playbookName})`);
+    appendLog(data, pr.key, `[DRY-RUN] Command: ${command}`);
+    if (logStream) {
+      logStream.write(
+        `┌─ 🤖 [SIMULATION] ${agentName} · ${playbookName} · 🟡 DRY-RUN ────────────────────────\n` +
+          `│ Time:      ${startTimeIso}\n` +
+          `│ PR:        ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
+          `│ Playbook:  ${playbookName}\n` +
+          `├─ Planned Prompt & Context ─────────────────────────────────────────────────────────────\n` +
+          `${promptText}\n\n` +
+          `└─ [End Simulation: ${new Date().toISOString()}] ─────────────────────────────────────────\n\n`
+      );
+      try {
+        logStream.end();
+      } catch {
+        // Ignore
+      }
+    }
+
+    const dryRecord: AgentExecutionRecord = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver,
+      mode: 'dry-run',
+      trigger,
+      startedAt: startTimeIso,
+      finishedAt: new Date().toISOString(),
+      durationMs: 0,
+      status: 'dry-run',
+      summary: `Simulated ${playbookName} with ${agentName}`,
+    };
+    recordAgentExecution(dryRecord, undefined, cwd);
+
+    const worker: WorkerHandle = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver,
+      mode: 'dry-run',
+      command,
+      worktreePath,
+      originalPrompt: promptText,
+      branch: pr.branch,
+      startedAt: startTime,
+      finishedAt: Date.now(),
+      logPath: logFile,
+      status: 'dry-run',
+    };
+    setWorker(data, pr.key, worker);
+    saveState(data, undefined, cwd);
+    return worker;
+  }
+
+  // ── Handle REMOTE Driver Dispatch ───────────────────────────────────────────
+  if (driver === 'remote') {
+    appendLog(data, pr.key, `Dispatching remote bot agent '${agentName}' (${playbookName})...`);
+    const triggerBody = definition.triggerTemplate
+      ? interpolateAgentCommand(definition.triggerTemplate, {
+          pr: pr.key.number,
+          branch: pr.branch,
+          owner: pr.key.owner,
+          repo: pr.key.repo,
+          url: pr.url,
+          prompt: promptText,
+          playbook: playbookName,
+        })
+      : `@${agentName} ${promptText}`;
+
+    if (logStream) {
+      logStream.write(
+        `\n=== [REMOTE DISPATCH: ${agentName} at ${startTimeIso}] ===\n` +
+          `Trigger Body:\n${triggerBody}\n\n`
+      );
+      try {
+        logStream.end();
+      } catch {
+        // Ignore
+      }
+    }
+
+    let isRemoteSuccess = false;
+    let remoteError: string | undefined;
+
+    try {
+      await addComment(pr.key.owner, pr.key.repo, pr.key.number, triggerBody);
+      appendLog(data, pr.key, `Posted trigger comment for @${agentName}`);
+      isRemoteSuccess = true;
+    } catch (err) {
+      remoteError = (err as Error).message;
+      appendLog(data, pr.key, `Remote trigger comment failed: ${remoteError}`);
+    }
+
+    const workerStatus = isRemoteSuccess ? 'completed' : 'failed';
+    const worker: WorkerHandle = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver: 'remote',
+      mode: 'live',
+      command: triggerBody,
+      worktreePath: '',
+      originalPrompt: promptText,
+      branch: pr.branch,
+      startedAt: startTime,
+      finishedAt: Date.now(),
+      logPath: logFile,
+      status: workerStatus,
+      error: remoteError,
+    };
+
+    setWorker(data, pr.key, worker);
+    saveState(data, undefined, cwd);
+
+    // Record remote dispatch telemetry
+    const execRecord: AgentExecutionRecord = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver: 'remote',
+      mode: 'live',
+      trigger,
+      startedAt: startTimeIso,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - startTime,
+      status: workerStatus,
+      error: remoteError,
+      summary: isRemoteSuccess
+        ? `Dispatched remote bot @${agentName}`
+        : `Failed to dispatch remote bot @${agentName}: ${remoteError}`,
+    };
+    recordAgentExecution(execRecord, undefined, cwd);
+
+    return worker;
+  }
+
+  // ── Handle LOCAL Worktree Process Dispatch ──────────────────────────────────
+  appendLog(data, pr.key, `Provisioning worktree at ${worktreePath}...`);
+
+  const allowPush = !playbookDef.readOnly && playbookName !== 'preflight-review';
+  try {
+    await provisionWorktree(pr, worktreePath, { allowPush });
+  } catch (err) {
+    const errorMsg = `Worktree provisioning failed: ${(err as Error).message}`;
+    appendLog(data, pr.key, errorMsg);
+    if (logStream) {
+      try {
+        logStream.write(`\n[ERROR] ${errorMsg}\n`);
+        logStream.end();
+      } catch {
+        // Ignore
+      }
+    }
+    const failedWorker: WorkerHandle = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver: 'local',
+      mode: 'live',
+      command,
+      worktreePath,
+      originalPrompt: promptText,
+      branch: pr.branch,
+      startedAt: startTime,
+      finishedAt: Date.now(),
+      logPath: logFile,
+      status: 'failed',
+      error: errorMsg,
+    };
+    setWorker(data, pr.key, failedWorker);
+    saveState(data, undefined, cwd);
+
+    const execRecord: AgentExecutionRecord = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver: 'local',
+      mode: 'live',
+      trigger,
+      startedAt: startTimeIso,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - startTime,
+      status: 'failed',
+      error: errorMsg,
+    };
+    recordAgentExecution(execRecord, undefined, cwd);
+    return failedWorker;
+  }
+
+  appendLog(data, pr.key, `Dispatching agent '${agentName}' (${playbookName})...`);
   appendLog(data, pr.key, `Command: ${command}`);
 
-  // 4. Spawn Agent CLI Process in worktree directory with headless isolation
-  const child = spawn(command, {
-    shell: true,
+  if (logStream) {
+    logStream.write(
+      `┌─ 🤖 [EXECUTION] ${agentName} · ${playbookName} · 🟢 LIVE ─────────────────────────────\n` +
+        `│ Started:   ${startTimeIso}\n` +
+        `│ PR:        ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
+        `│ Worktree:  ${worktreePath}\n` +
+        `├─ Live Output Stream ───────────────────────────────────────────────────────────────────\n`
+    );
+  }
+
+  const { bin, args } = getSpawnExecution(agentName, command, promptText, definition);
+  const child = spawn(bin, args, {
+    shell: false,
     cwd: worktreePath,
-    detached: true,
+    detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      CI: '1',
-      TERM: 'dumb',
-      NO_COLOR: '1',
-      FORCE_COLOR: '0',
-    },
+    env: buildSanitizedEnvironment(process.env),
   });
 
   const worker: WorkerHandle = {
     sessionId,
     prKey: pr.key,
     agentName,
+    playbookName,
+    driver: 'local',
+    mode: 'live',
     command,
     worktreePath,
-    originalPrompt: prompt,
+    originalPrompt: promptText,
     branch: pr.branch,
-    startedAt: Date.now(),
+    startedAt: startTime,
     pid: child.pid,
     logPath: logFile,
     status: 'running',
   };
 
   setWorker(data, pr.key, worker);
-  saveState(data, undefined, options.cwd);
+  saveState(data, undefined, cwd);
 
-  // 5. Stream Output
+  let capturedOutput = '';
+
   child.stdout?.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
+    capturedOutput += text;
     try {
       logStream?.write(text);
     } catch {
@@ -171,6 +601,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
 
   child.stderr?.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
+    capturedOutput += text;
     try {
       logStream?.write(text);
     } catch {
@@ -178,32 +609,104 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     }
   });
 
-  child.on('close', (code) => {
+  child.on('close', async (code, signal) => {
+    if (worker.status !== 'running') {
+      // Already cancelled or handled
+      return;
+    }
+    const finishedAt = Date.now();
+    const durationMs = finishedAt - startTime;
+    const durationSec = (durationMs / 1000).toFixed(1);
     try {
+      logStream?.write(`\n└─ [Completed in ${durationSec}s · Exit Code: ${code ?? 'none'}${signal ? ` · Signal: ${signal}` : ''}] ──────────────────────────────────────\n\n`);
       logStream?.end();
     } catch {
       // Ignore end errors
     }
-    worker.finishedAt = Date.now();
-    if (code === 0) {
-      worker.status = 'completed';
-      appendLog(data, pr.key, `Agent '${agentName}' completed successfully`);
+    worker.finishedAt = finishedAt;
+
+    const isSuccess = code === 0;
+    worker.status = isSuccess ? 'completed' : 'failed';
+
+    if (isSuccess) {
+      appendLog(data, pr.key, `Agent '${agentName}' (${playbookName}) completed successfully`);
     } else {
-      worker.status = 'failed';
-      appendLog(data, pr.key, `Agent '${agentName}' exited with code ${code}`);
+      appendLog(data, pr.key, `Agent '${agentName}' (${playbookName}) exited with code ${code ?? 'signal ' + signal}`);
     }
-    saveState(data, undefined, options.cwd);
+
+    // If preflight-review completed with findings, publish to GitHub PR
+    if (playbookName === 'preflight-review' && isSuccess && capturedOutput.trim().length > 0) {
+      try {
+        await addComment(pr.key.owner, pr.key.repo, pr.key.number, capturedOutput.trim());
+        appendLog(data, pr.key, `Published preflight review findings to GitHub PR #${pr.key.number}`);
+      } catch (err) {
+        appendLog(data, pr.key, `Failed to post review findings to GitHub: ${(err as Error).message}`);
+      }
+    }
+
+    // If fixer completed and push is allowed, check for changes and push
+    if ((playbookName === 'address-comments' || playbookName === 'ci-repair') && isSuccess && allowPush) {
+      try {
+        const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
+        if (statusOut.trim().length > 0) {
+          await execFileAsync('git', ['commit', '-am', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
+          await execFileAsync('git', ['push', '--force-with-lease', 'origin', pr.branch], { cwd: worktreePath });
+          appendLog(data, pr.key, `Fixer agent pushed fixes to branch '${pr.branch}'`);
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
+    const execRecord: AgentExecutionRecord = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver: 'local',
+      mode: 'live',
+      trigger,
+      startedAt: startTimeIso,
+      finishedAt: new Date(finishedAt).toISOString(),
+      durationMs,
+      status: worker.status,
+      exitCode: code ?? undefined,
+      signal: signal ?? undefined,
+    };
+    recordAgentExecution(execRecord, undefined, cwd);
+    saveState(data, undefined, cwd);
   });
 
   child.on('error', (err) => {
+    if (worker.status !== 'running') {
+      return;
+    }
     try {
       logStream?.end();
     } catch {
       // Ignore end errors
     }
+    const finishedAt = Date.now();
+    worker.finishedAt = finishedAt;
     worker.status = 'failed';
     appendLog(data, pr.key, `Agent '${agentName}' process error: ${err.message}`);
-    saveState(data, undefined, options.cwd);
+
+    const execRecord: AgentExecutionRecord = {
+      sessionId,
+      prKey: pr.key,
+      agentName,
+      playbookName,
+      driver: 'local',
+      mode: 'live',
+      trigger,
+      startedAt: startTimeIso,
+      finishedAt: new Date(finishedAt).toISOString(),
+      durationMs: finishedAt - startTime,
+      status: 'failed',
+      error: err.message,
+    };
+    recordAgentExecution(execRecord, undefined, cwd);
+    saveState(data, undefined, cwd);
   });
 
   return worker;
@@ -215,6 +718,9 @@ export function cancelWorker(data: AppState, prKey: PrKey, cwd?: string): boolea
   if (!worker || worker.status !== 'running') {
     return false;
   }
+
+  worker.status = 'cancelled';
+  worker.finishedAt = Date.now();
 
   if (worker.pid) {
     try {
@@ -228,8 +734,23 @@ export function cancelWorker(data: AppState, prKey: PrKey, cwd?: string): boolea
     }
   }
 
-  worker.status = 'cancelled';
   appendLog(data, prKey, `Worker session ${worker.sessionId} cancelled`);
+
+  const execRecord: AgentExecutionRecord = {
+    sessionId: worker.sessionId,
+    prKey,
+    agentName: worker.agentName,
+    playbookName: worker.playbookName || 'custom',
+    driver: worker.driver || 'local',
+    mode: worker.mode || 'live',
+    trigger: 'manual',
+    startedAt: new Date(worker.startedAt).toISOString(),
+    finishedAt: new Date().toISOString(),
+    durationMs: Date.now() - worker.startedAt,
+    status: 'cancelled',
+  };
+  recordAgentExecution(execRecord, undefined, cwd);
+
   saveState(data, undefined, cwd);
   return true;
 }

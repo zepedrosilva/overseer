@@ -82,13 +82,12 @@ export function evaluateCiStatus(checks: CiCheckRun[]): CiStatus {
     if (
       conclusion === 'FAILURE' ||
       conclusion === 'TIMED_OUT' ||
-      conclusion === 'ACTION_REQUIRED' ||
-      conclusion === 'CANCELLED'
+      conclusion === 'ACTION_REQUIRED'
     ) {
       hasFailure = true;
     } else if (status === 'IN_PROGRESS' || status === 'QUEUED' || !conclusion) {
       hasPending = true;
-    } else if (conclusion === 'SUCCESS' || conclusion === 'NEUTRAL' || conclusion === 'SKIPPED') {
+    } else if (conclusion === 'SUCCESS' || conclusion === 'NEUTRAL' || conclusion === 'SKIPPED' || conclusion === 'CANCELLED') {
       hasSuccess = true;
     }
   }

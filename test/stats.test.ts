@@ -129,13 +129,11 @@ describe('PR Stats & Velocity Engine', () => {
 
     const fullText = stripAnsi(lines.join('\n'));
     expect(fullText).toContain('PR Stats & Leaderboard: Mine (30d trailing)');
-    expect(fullText).toContain('MERGE VELOCITY');
-    expect(fullText).toContain('1ST REVIEW SPEED');
-    expect(fullText).toContain('REVIEW RESPONSE');
-    expect(fullText).toContain('CI PASS HEALTH');
-    expect(fullText).toContain('CODE DIFF & VOLUME');
-    expect(fullText).toContain('MERGED VELOCITY');
-    expect(fullText).toContain('PR Sizing:');
+    expect(fullText).toContain('MERGED PR VELOCITY');
+    expect(fullText).toContain('REVIEW TURNAROUND');
+    expect(fullText).toContain('CI PASS RATE');
+    expect(fullText).toContain('AVG PR SIZE & DIFF');
+    expect(fullText).toContain('DISCUSSION DENSITY');
     expect(fullText).toContain('[Tab] scope');
     expect(fullText).toContain('[Esc/p] close');
   });
