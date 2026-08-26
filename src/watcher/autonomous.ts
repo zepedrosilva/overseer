@@ -15,25 +15,30 @@ import {
 
 export const MAX_CONCURRENT_WORKERS = 2;
 export const MAX_CONSECUTIVE_AUTONOMOUS_RETRIES = 2;
-export const AUTONOMOUS_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+export const AUTONOMOUS_COOLDOWN_MS = 15 * 1000; // 15s stage cooldown
 
 // In-memory retry & cooldown tracker (ephemeral per process session)
 const prRetryCounters = new Map<string, number>();
 const prLastDispatchAt = new Map<string, number>();
 const prReviewedKeys = new Set<string>();
+const prFixedKeys = new Set<string>();
 
 export function getPrRetryCount(keyStr: string): number {
-  return prRetryCounters.get(keyStr) || 0;
+  return prRetryCounters.get(keyStr) || prRetryCounters.get(`${keyStr}:ci`) || prRetryCounters.get(`${keyStr}:fix`) || prRetryCounters.get(`${keyStr}:review`) || 0;
 }
 
 export function resetPrRetryCount(keyStr: string): void {
   prRetryCounters.delete(keyStr);
+  prRetryCounters.delete(`${keyStr}:ci`);
+  prRetryCounters.delete(`${keyStr}:fix`);
+  prRetryCounters.delete(`${keyStr}:review`);
 }
 
 export function resetAutonomousState(): void {
   prRetryCounters.clear();
   prLastDispatchAt.clear();
   prReviewedKeys.clear();
+  prFixedKeys.clear();
 }
 
 export async function evaluateAutonomousPolicies(
@@ -69,18 +74,6 @@ export async function evaluateAutonomousPolicies(
       continue; // Worker already running on this PR
     }
 
-    // Check circuit breaker: Cooldown
-    const lastAt = prLastDispatchAt.get(keyStr) || 0;
-    if (Date.now() - lastAt < AUTONOMOUS_COOLDOWN_MS) {
-      continue; // Within cooldown period
-    }
-
-    // Check circuit breaker: Max retries
-    const retryCount = prRetryCounters.get(keyStr) || 0;
-    if (retryCount >= MAX_CONSECUTIVE_AUTONOMOUS_RETRIES) {
-      continue; // Max retry loop breaker tripped
-    }
-
     const allowedTriggers = policy.triggers || ['CiFailing', 'ChangesRequested', 'Reviewing'];
 
     // ── 1. Check CI Failure Trigger ──────────────────────────────────────────
@@ -88,12 +81,21 @@ export async function evaluateAutonomousPolicies(
       pr.overallStatus === 'CiFailing' &&
       allowedTriggers.includes('CiFailing')
     ) {
+      const stageKey = `${keyStr}:ci`;
+      const lastAt = prLastDispatchAt.get(stageKey) || 0;
+      if (Date.now() - lastAt < AUTONOMOUS_COOLDOWN_MS) {
+        continue;
+      }
+      const retryCount = prRetryCounters.get(stageKey) || 0;
+      if (retryCount >= MAX_CONSECUTIVE_AUTONOMOUS_RETRIES) {
+        continue;
+      }
+
       const allowedPbs = policy.allowedPlaybooks || ['ci-repair'];
       const playbookName = allowedPbs.includes('ci-repair') ? 'ci-repair' : allowedPbs[0];
 
-      // Mark dispatch attempt
-      prRetryCounters.set(keyStr, retryCount + 1);
-      prLastDispatchAt.set(keyStr, Date.now());
+      prRetryCounters.set(stageKey, retryCount + 1);
+      prLastDispatchAt.set(stageKey, Date.now());
 
       appendLog(
         data,
@@ -137,76 +139,106 @@ export async function evaluateAutonomousPolicies(
       continue;
     }
 
-    // ── 2. Check Changes Requested / Review Comments Trigger ──────────────────
+    // ── 2. Check Changes Requested / Review Comments Feedback Trigger ────────
+    const hasFeedback =
+      pr.overallStatus === 'ChangesRequested' ||
+      (typeof pr.unresolvedThreadsCount === 'number' && pr.unresolvedThreadsCount > 0) ||
+      (typeof pr.commentsCount === 'number' && pr.commentsCount > 0 && pr.reviewVerdict !== 'APPROVED');
+
+    const allowedPbsForFix = policy.allowedPlaybooks || ['address-comments'];
     if (
-      pr.overallStatus === 'ChangesRequested' &&
-      allowedTriggers.includes('ChangesRequested')
+      hasFeedback &&
+      (allowedTriggers.includes('ChangesRequested') || allowedTriggers.includes('Reviewing')) &&
+      allowedPbsForFix.includes('address-comments')
     ) {
-      const allowedPbs = policy.allowedPlaybooks || ['address-comments'];
-      const playbookName = allowedPbs.includes('address-comments')
-        ? 'address-comments'
-        : allowedPbs[0];
+      const fixKey = `${keyStr}@comments-${pr.commentsCount || 0}-${pr.unresolvedThreadsCount || 0}@${pr.updatedAt || pr.branch}`;
+      const stageKey = `${keyStr}:fix`;
 
-      prRetryCounters.set(keyStr, retryCount + 1);
-      prLastDispatchAt.set(keyStr, Date.now());
+      if (!prFixedKeys.has(fixKey)) {
+        const lastAt = prLastDispatchAt.get(stageKey) || 0;
+        if (Date.now() - lastAt < AUTONOMOUS_COOLDOWN_MS) {
+          continue;
+        }
+        const retryCount = prRetryCounters.get(stageKey) || 0;
+        if (retryCount >= MAX_CONSECUTIVE_AUTONOMOUS_RETRIES) {
+          continue;
+        }
 
-      appendLog(
-        data,
-        pr.key,
-        `[policy] Autonomous trigger fired: ChangesRequested on ${keyStr} (Attempt ${retryCount + 1}/${MAX_CONSECUTIVE_AUTONOMOUS_RETRIES})`
-      );
+        const playbookName = 'address-comments';
 
-      let comments = 'Reviewers requested changes.';
-      try {
-        comments = await fetchUnresolvedReviewComments(
-          pr.key.owner,
-          pr.key.repo,
-          pr.key.number
+        prFixedKeys.add(fixKey);
+        prRetryCounters.set(stageKey, retryCount + 1);
+        prLastDispatchAt.set(stageKey, Date.now());
+
+        appendLog(
+          data,
+          pr.key,
+          `[policy] Autonomous trigger fired: Address Comments on ${keyStr} (${playbookName})`
         );
-      } catch {
-        // Fallback
-      }
 
-      const fixerAgent = getRepoRoleAgent(data, pr.key, 'fixer');
-      await dispatchAgent({
-        data,
-        pr,
-        config,
-        agentName: fixerAgent,
-        playbookName,
-        trigger: 'autonomous_review',
-        mode: mode === 'dry-run' ? 'dry-run' : 'live',
-        comments,
-        cwd,
-      });
+        let comments = 'Reviewers provided comments and feedback.';
+        try {
+          comments = await fetchUnresolvedReviewComments(
+            pr.key.owner,
+            pr.key.repo,
+            pr.key.number
+          );
+        } catch {
+          // Fallback
+        }
 
-      if (
-        Array.from(data.workers.values()).filter((w) => w.status === 'running').length >=
-        MAX_CONCURRENT_WORKERS
-      ) {
-        break;
+        const fixerAgent = getRepoRoleAgent(data, pr.key, 'fixer');
+        await dispatchAgent({
+          data,
+          pr,
+          config,
+          agentName: fixerAgent,
+          playbookName,
+          trigger: 'autonomous_review',
+          mode: mode === 'dry-run' ? 'dry-run' : 'live',
+          comments,
+          cwd,
+        });
+
+        if (
+          Array.from(data.workers.values()).filter((w) => w.status === 'running').length >=
+          MAX_CONCURRENT_WORKERS
+        ) {
+          break;
+        }
+        continue;
       }
-      continue;
     }
 
     // ── 3. Check Reviewing / Pre-flight Review Trigger ─────────────────────────
+    const allowedPbsForReview = policy.allowedPlaybooks || ['preflight-review'];
     if (
       pr.overallStatus === 'Reviewing' &&
-      allowedTriggers.includes('Reviewing')
+      !hasFeedback &&
+      allowedTriggers.includes('Reviewing') &&
+      allowedPbsForReview.includes('preflight-review')
     ) {
       const reviewRevisionKey = `${keyStr}@${pr.updatedAt || pr.branch}`;
+      const stageKey = `${keyStr}:review`;
+
       if (prReviewedKeys.has(reviewRevisionKey)) {
         continue; // Revision already reviewed
       }
 
-      const allowedPbs = policy.allowedPlaybooks || ['preflight-review'];
-      const playbookName = allowedPbs.includes('preflight-review')
-        ? 'preflight-review'
-        : allowedPbs[0];
+      const lastAt = prLastDispatchAt.get(stageKey) || 0;
+      if (Date.now() - lastAt < AUTONOMOUS_COOLDOWN_MS) {
+        continue;
+      }
+      const retryCount = prRetryCounters.get(stageKey) || 0;
+      if (retryCount >= MAX_CONSECUTIVE_AUTONOMOUS_RETRIES) {
+        continue;
+      }
 
-      prRetryCounters.set(keyStr, retryCount + 1);
-      prLastDispatchAt.set(keyStr, Date.now());
+      const playbookName = 'preflight-review';
+
       prReviewedKeys.add(reviewRevisionKey);
+      prRetryCounters.set(stageKey, retryCount + 1);
+      prLastDispatchAt.set(stageKey, Date.now());
 
       appendLog(
         data,

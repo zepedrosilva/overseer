@@ -30,7 +30,7 @@ function createPrFixture(num: number, status: 'CiFailing' | 'ChangesRequested' |
         conclusion: status === 'CiFailing' ? 'FAILURE' : 'SUCCESS',
       },
     ],
-    commentsCount: 2,
+    commentsCount: status === 'ChangesRequested' ? 2 : 0,
     log: [],
   };
 }
@@ -262,5 +262,49 @@ describe('Autonomous Policy Evaluator & Safety Circuit Breakers', () => {
         playbookName: 'preflight-review',
       })
     );
+  });
+
+  it('autonomously chains to fixer agent (agy) when review comments arrive on PR', async () => {
+    const data = createEmptyState();
+    const prWithComments = createPrFixture(6, 'Reviewing');
+    prWithComments.commentsCount = 2;
+    prWithComments.reviewVerdict = 'COMMENTED';
+    upsertPR(data, prWithComments);
+
+    setRepoPolicy(data, 'acme-corp/web-frontend', {
+      mode: 'live',
+      agents: {
+        reviewer: 'claude',
+        fixer: 'agy',
+        ciRepair: 'agy',
+      },
+      triggers: ['ChangesRequested', 'Reviewing'],
+      allowedPlaybooks: ['address-comments'],
+    });
+
+    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
+      sessionId: 'sess-5',
+      prKey: prWithComments.key,
+      agentName: 'agy',
+      command: 'mock',
+      worktreePath: 'mock',
+      branch: prWithComments.branch,
+      startedAt: Date.now(),
+      status: 'running',
+    });
+
+    await evaluateAutonomousPolicies(data, mockConfig);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'agy',
+        playbookName: 'address-comments',
+      })
+    );
+
+    // Subsequent evaluation without new comments should skip redundant fix
+    await evaluateAutonomousPolicies(data, mockConfig);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
 });

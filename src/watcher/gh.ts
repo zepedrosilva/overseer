@@ -513,6 +513,21 @@ export async function fetchUnresolvedReviewComments(
               }
             }
           }
+          reviews(last: 10) {
+            nodes {
+              author { login }
+              body
+              state
+              submittedAt
+            }
+          }
+          comments(last: 10) {
+            nodes {
+              author { login }
+              body
+              createdAt
+            }
+          }
         }
       }
     }
@@ -537,33 +552,74 @@ export async function fetchUnresolvedReviewComments(
                 };
               }>;
             };
+            reviews?: {
+              nodes?: Array<{
+                author?: { login: string };
+                body?: string;
+                state: string;
+                submittedAt?: string;
+              }>;
+            };
+            comments?: {
+              nodes?: Array<{
+                author?: { login: string };
+                body?: string;
+                createdAt: string;
+              }>;
+            };
           };
         };
       };
     }>(query, { owner, repo, number });
 
-    const threads = res?.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
-    const unresolved = threads.filter((t) => !t.isResolved);
+    const prData = res?.data?.repository?.pullRequest;
+    const threads = prData?.reviewThreads?.nodes || [];
+    const unresolvedThreads = threads.filter((t) => !t.isResolved);
+    const reviews = (prData?.reviews?.nodes || []).filter((r) => r.body && r.body.trim().length > 0);
+    const issueComments = (prData?.comments?.nodes || []).filter((c) => c.body && c.body.trim().length > 0);
 
-    if (unresolved.length === 0) {
-      return 'No unresolved review comment threads found.';
-    }
+    const sections: string[] = [];
 
-    const lines: string[] = [];
-    for (let i = 0; i < unresolved.length; i++) {
-      const t = unresolved[i];
-      const comments = t.comments?.nodes || [];
-      const location = t.line ? `${t.path}:${t.line}` : t.path;
-      lines.push(`--- Thread #${i + 1} at ${location} ---`);
-      for (const c of comments) {
-        const author = c.author?.login || 'reviewer';
-        lines.push(`@${author}: ${c.body.trim()}`);
+    // 1. Format Unresolved Inline Code Threads
+    if (unresolvedThreads.length > 0) {
+      sections.push('### Inline Code Review Threads');
+      for (let i = 0; i < unresolvedThreads.length; i++) {
+        const t = unresolvedThreads[i];
+        const comments = t.comments?.nodes || [];
+        const location = t.line ? `${t.path}:${t.line}` : t.path;
+        sections.push(`--- Thread #${i + 1} at ${location} ---`);
+        for (const c of comments) {
+          const author = c.author?.login || 'reviewer';
+          sections.push(`@${author}: ${c.body.trim()}`);
+        }
       }
     }
 
-    return lines.join('\n\n');
+    // 2. Format Review Summaries
+    if (reviews.length > 0) {
+      sections.push('### Pull Request Reviews');
+      for (const r of reviews) {
+        const author = r.author?.login || 'reviewer';
+        sections.push(`[${r.state}] @${author}:\n${r.body?.trim()}`);
+      }
+    }
+
+    // 3. Format Discussion Comments (if no review threads or reviews found)
+    if (sections.length === 0 && issueComments.length > 0) {
+      sections.push('### Review & Discussion Comments');
+      for (const c of issueComments) {
+        const author = c.author?.login || 'commenter';
+        sections.push(`@${author}:\n${c.body?.trim()}`);
+      }
+    }
+
+    if (sections.length === 0) {
+      return 'No unresolved review comments or feedback found.';
+    }
+
+    return sections.join('\n\n');
   } catch (err) {
-    return `Unable to fetch review comment threads: ${(err as Error).message}`;
+    return `Unable to fetch review comments: ${(err as Error).message}`;
   }
 }
 
