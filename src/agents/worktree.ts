@@ -22,9 +22,14 @@ export function resolveWorktreeDir(
   return path.join(baseDir, folderName);
 }
 
+export interface ProvisionWorktreeOptions {
+  allowPush?: boolean;
+}
+
 export async function provisionWorktree(
   pr: PrState,
-  worktreePath: string
+  worktreePath: string,
+  options?: ProvisionWorktreeOptions
 ): Promise<string> {
   if (!fs.existsSync(worktreePath)) {
     fs.mkdirSync(worktreePath, { recursive: true });
@@ -52,6 +57,17 @@ export async function provisionWorktree(
       });
     } catch {
       // Worktree initialized with available files
+    }
+  }
+
+  // If push is disabled (e.g. read-only review playbook or sandboxed run), intercept git push
+  if (options?.allowPush === false) {
+    try {
+      await execFileAsync('git', ['remote', 'set-url', '--push', 'origin', 'OVERSEER_PUSH_DISABLED'], {
+        cwd: worktreePath,
+      });
+    } catch {
+      // Ignore if remote configuration fails in mock environments
     }
   }
 

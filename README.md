@@ -193,32 +193,85 @@ overseer --reset-settings
 
 ---
 
-## 🤖 2-Step Agent Selection & Worktree Execution
+---
 
-When you press `[a]` on a selected PR:
-1. **Step 1 (Agent Picker)**: Overseer shows the current assigned agent for that repository pre-selected (e.g. `● [1] claude  ○ [2] agy  ○ [3] pi ...`). Pressing <kbd>Enter</kbd> accepts it, or pressing <kbd>1-N</kbd> / <kbd>←/→</kbd> selects a different agent and automatically persists it to `./.overseer/state.json`.
-2. **Step 2 (Prompt Entry)**: Input an optional custom prompt (e.g., `Fix typing error in billing controller`) and press <kbd>Enter</kbd>.
-3. **Execution**: Overseer provisions an isolated git worktree inside `./.overseer/worktrees/<owner>-<repo>-<number>/`, checks out the PR branch, and dispatches the AI agent. Logs stream in real-time to the Details panel.
+## 🤖 Autonomous Agent Delegation & Playbook Engine
 
-### 🧩 Custom Local Agents (`./.overseer/agents.json`)
+Overseer provides a declarative, policy-driven autonomous agent orchestrator with reusable playbooks, isolated git worktrees, safety circuit breakers, and rich telemetry:
 
-You can define custom CLI agents or bot comment triggers locally in the gitignored `./.overseer/agents.json` file without modifying source code:
+### 1. Built-in Playbook Pathways
+
+| Playbook | Purpose | Injected Context |
+| :--- | :--- | :--- |
+| **`ci-repair`** | Diagnoses failing CI check runs, fixes code in worktree, and pushes. | `{failingCheck}`, `{ciLogs}`, `{diffSummary}` |
+| **`address-comments`** | Addresses unresolved review feedback and reviewer comments. | `{comments}`, `{unresolvedThreads}` |
+| **`preflight-review`** | Performs automated pre-flight code review against repository guidelines. | `{diffSummary}`, `{branch}`, `{baseBranch}` |
+| **`rebase-resolver`** | Rebases branch onto base branch and resolves merge conflicts. | `{branch}`, `{baseBranch}` |
+
+### 2. Granular Per-Repo Automation Modes
+
+Configure repository automation in `./.overseer/settings.json` or interactively in Settings:
+* 🟢 **`live`**: Autonomously provisions worktree, executes agent, runs tests, and pushes fixes.
+* 🟡 **`dry-run`**: Simulates delegation, logs prompt and command to `./.overseer/logs/`, and records telemetry without touching git or spawning processes.
+* ⚪ **`off`**: Manual dispatch only (via <kbd>a</kbd> or API).
+
+```json
+{
+  "repoPolicies": {
+    "acme-corp/web-frontend": {
+      "mode": "live",
+      "agent": "agy",
+      "triggers": ["CiFailing"],
+      "allowedPlaybooks": ["ci-repair"]
+    },
+    "acme-corp/api-gateway": {
+      "mode": "dry-run",
+      "agent": "claude",
+      "triggers": ["ChangesRequested"],
+      "allowedPlaybooks": ["address-comments"]
+    }
+  }
+}
+```
+
+### 3. Dedicated Telemetry Store (`./.overseer/agent-stats.json`) & Analytics Modal
+
+Agent runs, execution times, success/failure outcomes, and audit trails are persisted in a dedicated `./.overseer/agent-stats.json` store (decoupled from ephemeral PR cache).
+
+Press <kbd>p</kbd> and then <kbd>a</kbd> to open the **🤖 Agent Operations & Interventions Dashboard**:
+* **Performance by Agent**: Dispatches, success rate %, avg turnaround time, failures.
+* **Performance by Playbook**: Runs, success %, avg duration, top target repo.
+* **Intervention Breakdown by Repo**: Auto vs manual runs, success %, mode (`LIVE`/`DRY`/`OFF`).
+* **Recent Execution Audit Trail**: Chronological log of recent dispatches with duration and outcome.
+
+### 4. Custom Local Agents & Remote Bot Webhooks (`./.overseer/agents.json`)
+
+You can define local CLI agents or remote bot triggers in `./.overseer/agents.json`:
 
 ```json
 {
   "customAgents": {
-    "opencode": {
-      "command": "opencode run --repo {owner}/{repo} --pr {pr} \"{prompt}\"",
-      "description": "OpenCode autonomous agentic CLI"
+    "claude": {
+      "command": "claude -p \"{prompt}\"",
+      "description": "Claude CLI agent",
+      "driver": "local"
     },
-    "copilot": {
-      "command": "gh pr comment {pr} --repo {owner}/{repo} --body \"/copilot {prompt}\"",
-      "description": "GitHub Copilot PR comment trigger"
+    "moxly": {
+      "driver": "remote",
+      "triggerTemplate": "@moxly {prompt}",
+      "description": "Moxly Cloud Review & Repair Agent"
     }
-  },
-  "disabledAgents": ["pi"]
+  }
 }
 ```
+
+### 5. Multi-Layered Safety & Git Push Guards
+
+Overseer enforces strict physical guards to ensure agents can never clobber branches or push unintended commits:
+* 🛡️ **Zero-Process Simulation in Dry-Run**: When a repo is in `dry-run`, prompts and commands are formatted and logged, but no child processes or git worktrees are spawned (0 API tokens consumed).
+* 🔒 **Git Remote Push Guard**: For read-only playbooks (such as `preflight-review`), Overseer automatically sets `git remote set-url --push origin OVERSEER_PUSH_DISABLED` inside the isolated worktree so any attempted push is physically rejected by Git.
+* 🌿 **Isolated Git Worktrees**: Agents operate exclusively inside ephemeral `./.overseer/worktrees/` folders without touching your main working directory.
+* 🧹 **Automatic Worktree Pruning**: On PR merge or close, all associated temporary worktrees and execution logs are deleted automatically.
 
 ---
 

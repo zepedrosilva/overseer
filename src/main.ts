@@ -32,6 +32,7 @@ import {
 } from './watcher/gh.js';
 import { pollAllRepos } from './watcher/index.js';
 import { dispatchAgent } from './agents/index.js';
+import { resetAgentStats } from './agents/stats.js';
 import { resolveWorktreeDir, cleanupWorktree, cleanupPRArtifacts } from './agents/worktree.js';
 
 interface CliArgs {
@@ -46,6 +47,7 @@ interface CliArgs {
   team?: string;
   resetState?: boolean;
   resetSettings?: boolean;
+  resetAgentStats?: boolean;
   resetAll?: boolean;
 }
 
@@ -96,6 +98,8 @@ function parseCliArgs(): CliArgs {
       result.resetState = true;
     } else if (arg === '--reset-settings') {
       result.resetSettings = true;
+    } else if (arg === '--reset-agent-stats') {
+      result.resetAgentStats = true;
     } else if (arg === '--reset-all') {
       result.resetAll = true;
     }
@@ -110,9 +114,11 @@ async function main(): Promise<void> {
   // 1. Handle reset flags
   if (cli.resetAll) {
     resetAll();
+    resetAgentStats();
   } else {
     if (cli.resetState) resetState();
     if (cli.resetSettings) resetSettings();
+    if (cli.resetAgentStats) resetAgentStats();
   }
 
   // 2. Load persisted state or initialize empty domain state
@@ -301,12 +307,7 @@ async function main(): Promise<void> {
     if (action === 'agent') {
       const prompt = typeof payload?.prompt === 'string' && payload.prompt.length > 0 ? payload.prompt : undefined;
       const agentName = (payload?.agentName as string) || (pr ? getRepoAgent(data, pr.key) : data.settings.defaultAgent);
-
-      if (data.dryRun) {
-        appendLog(data, pr.key, `[DRY-RUN] Would dispatch agent '${agentName}' in worktree`);
-        tui?.showMessage(`DRY-RUN: Agent dispatch skipped for ${keyStr}`);
-        return;
-      }
+      const playbookName = (payload?.playbookName as string) || (prompt ? 'custom' : undefined);
 
       tui?.showMessage(`Dispatching agent '${agentName}' for ${keyStr}...`);
       dispatchAgent({
@@ -314,10 +315,13 @@ async function main(): Promise<void> {
         pr,
         config: appStateToAppConfig(data),
         agentName,
+        playbookName,
         prompt,
+        trigger: 'manual',
       })
         .then(() => {
           tui?.render();
+          apiServer?.broadcast('workerUpdated', { key: keyStr, status: 'running' });
         })
         .catch((err) => {
           appendLog(data, pr.key, `Agent error: ${(err as Error).message}`);

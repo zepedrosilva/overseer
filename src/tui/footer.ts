@@ -1,7 +1,7 @@
 // ── TUI Footer & Modal Prompt Engine ────────────────────────────────────────
 // Context-sensitive footer actions and interactive prompt modals matching llmfit.
 
-import type { PrState } from '../app/types.js';
+import type { PrState, RepoPolicyMode } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { colors, rgbColor } from './colors.js';
 import { padEndVisual } from './layout.js';
@@ -21,11 +21,12 @@ export interface FooterContext {
   inputBuffer: string;
   selectedAgent?: string;
   availableAgents?: string[];
+  repoMode?: RepoPolicyMode;
   message?: string;
 }
 
 export function renderFooter(context: FooterContext, width: number): string {
-  const { mode, selectedPR, inputBuffer, selectedAgent, availableAgents, message } = context;
+  const { mode, selectedPR, inputBuffer, selectedAgent, availableAgents, repoMode = 'off', message } = context;
   const safeWidth = Math.max(10, width - 2);
 
   if (message) {
@@ -51,7 +52,7 @@ export function renderFooter(context: FooterContext, width: number): string {
   }
 
   if (mode === 'AGENT_SELECT') {
-    const repoStr = selectedPR ? `${selectedPR.key.repo}` : 'repo';
+    const repoStr = selectedPR ? `${selectedPR.key.owner}/${selectedPR.key.repo}` : 'repo';
     const agentsList = availableAgents && availableAgents.length > 0 ? availableAgents : ['claude', 'agy', 'gemini', 'pi'];
     const badges = agentsList.map((name, idx) => {
       const isCurrent = name === selectedAgent;
@@ -59,7 +60,15 @@ export function renderFooter(context: FooterContext, width: number): string {
       const nameColor = isCurrent ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
       return `${icon} \x1B[${rgbColor(colors.cyan)}[${idx + 1}]\x1B[0m ${nameColor}${name}\x1B[0m`;
     }).join('  ');
-    const text = `  \x1B[${rgbColor(colors.cyan)}› Agent for ${repoStr}:\x1B[0m  ${badges}    \x1B[${rgbColor(colors.fgDim)}[Enter] accept  [1-${agentsList.length} / ← →] select  [Esc] cancel\x1B[0m`;
+
+    const modeStr =
+      repoMode === 'live'
+        ? `\x1B[${rgbColor(colors.green)}🟢 LIVE\x1B[0m`
+        : repoMode === 'dry-run'
+        ? `\x1B[${rgbColor(colors.yellow)}🟡 DRY-RUN\x1B[0m`
+        : `\x1B[${rgbColor(colors.fgDim)}⚪ OFF\x1B[0m`;
+
+    const text = `  \x1B[${rgbColor(colors.cyan)}› ${repoStr}:\x1B[0m  ${badges}   Mode: \x1B[${rgbColor(colors.cyan)}[m]\x1B[0m ${modeStr}   \x1B[${rgbColor(colors.fgDim)}[Enter] save & prompt  [Esc] cancel\x1B[0m`;
     return padEndVisual(text, safeWidth);
   }
 

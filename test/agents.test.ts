@@ -228,5 +228,14 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(cancelled).toBe(true);
       expect(worker.status).toBe('cancelled');
     }, 15000);
+
+    it('provisions worktree with allowPush: false option without errors', async () => {
+      const { provisionWorktree } = await import('../src/agents/worktree.js');
+      const pr = createMockPR();
+      const wtPath = path.join(tmpDir, 'test-wt');
+      const res = await provisionWorktree(pr, wtPath, { allowPush: false });
+      expect(res).toBe(wtPath);
+      expect(fs.existsSync(wtPath)).toBe(true);
+    });
   });
 });

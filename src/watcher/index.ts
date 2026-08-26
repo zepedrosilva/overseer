@@ -8,6 +8,7 @@ import type { AppState, AppConfig, RepoHandle, PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
 import { runGraphQL, fetchTeamMembers, fetchTeamMemberProfiles, checkRateLimit } from './gh.js';
+import { evaluateAutonomousPolicies } from './autonomous.js';
 import {
   buildBatchPRQuery,
   parseGraphQLBatchResponse,
@@ -399,6 +400,13 @@ export async function pollAllRepos(
           recordHistoricalPr(data, { ...pr, state: 'CLOSED', overallStatus: 'Closed' });
           data.prs.delete(keyStr);
         }
+      }
+
+      // Evaluate autonomous delegation policies on active PRs
+      try {
+        await evaluateAutonomousPolicies(data, config);
+      } catch (err) {
+        logWatcherMessage(`Autonomous policy evaluation error: ${(err as Error).message}`);
       }
     }
   } finally {

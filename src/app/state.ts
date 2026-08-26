@@ -20,6 +20,8 @@ import type {
   HistoricalPrRecord,
   HistoricalStatsStore,
   MemberBackfillWatermark,
+  RepoPolicyConfig,
+  RepoPolicyMode,
 } from './types.js';
 import { prKeyToString } from './types.js';
 
@@ -84,6 +86,7 @@ export function createEmptyState(
     settings,
     extensions: ext,
     repoAgents: {},
+    repoPolicies: {},
     customAgents: {},
     repos: [],
     prs: new Map<string, PrState>(),
@@ -112,6 +115,7 @@ export function saveSettings(data: AppState, customPath?: string, cwd: string = 
     settings: data.settings,
     extensions: data.extensions,
     repoAgents: data.repoAgents,
+    repoPolicies: data.repoPolicies,
   };
 
   fs.writeFileSync(filePath, JSON.stringify(serializable, null, 2), 'utf-8');
@@ -127,6 +131,7 @@ export function loadSettings(customPath?: string, cwd: string = process.cwd()): 
         settings: parsed.settings || {},
         extensions: parsed.extensions || {},
         repoAgents: parsed.repoAgents || {},
+        repoPolicies: parsed.repoPolicies || {},
       };
     } catch {
       return null;
@@ -242,10 +247,12 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
   };
 
   const repoAgents: Record<string, string> = { ...(settingsConfig?.repoAgents || {}) };
+  const repoPolicies: Record<string, RepoPolicyConfig> = { ...(settingsConfig?.repoPolicies || {}) };
 
   if (!stateExists) {
     const empty = createEmptyState(settings, extensions);
     empty.repoAgents = repoAgents;
+    empty.repoPolicies = repoPolicies;
     return empty;
   }
 
@@ -321,6 +328,7 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       settings,
       extensions,
       repoAgents,
+      repoPolicies,
       customAgents,
       repos: Array.isArray(parsed.repos) ? parsed.repos : [],
       prs,
@@ -449,6 +457,40 @@ export function setRepoAgent(
     data.repoAgents = {};
   }
   data.repoAgents[key] = agentName;
+}
+
+export function getRepoPolicy(
+  data: AppState,
+  repo: { owner: string; repo: string } | string
+): RepoPolicyConfig | null {
+  const key = typeof repo === 'string' ? repo.toLowerCase() : `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`;
+  if (data.repoPolicies && data.repoPolicies[key]) {
+    return data.repoPolicies[key];
+  }
+  if (data.repoPolicies && data.repoPolicies['*']) {
+    return data.repoPolicies['*'];
+  }
+  return null;
+}
+
+export function setRepoPolicy(
+  data: AppState,
+  repo: { owner: string; repo: string } | string,
+  policy: RepoPolicyConfig
+): void {
+  const key = typeof repo === 'string' ? repo.toLowerCase() : `${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`;
+  if (!data.repoPolicies) {
+    data.repoPolicies = {};
+  }
+  data.repoPolicies[key] = policy;
+}
+
+export function getRepoMode(
+  data: AppState,
+  repo: { owner: string; repo: string } | string
+): RepoPolicyMode {
+  const policy = getRepoPolicy(data, repo);
+  return policy?.mode || 'off';
 }
 
 export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile {

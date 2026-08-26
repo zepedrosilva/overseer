@@ -443,3 +443,146 @@ export async function fetchTeamMemberProfiles(
 
   return profiles;
 }
+
+// ── Autonomous Context Extractors ──────────────────────────────────────────
+
+export async function fetchFailedCiLogs(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  try {
+    const { stdout: checksOut } = await execFileAsync('gh', [
+      'pr',
+      'checks',
+      String(number),
+      '--repo',
+      `${owner}/${repo}`,
+      '--json',
+      'name,state,bucket,description,link',
+    ]);
+    const checks = JSON.parse(checksOut) as Array<{
+      name: string;
+      state: string;
+      bucket: string;
+      description?: string;
+      link?: string;
+    }>;
+
+    const failed = checks.filter(
+      (c) => c.bucket === 'fail' || c.state === 'FAILURE' || c.state === 'TIMED_OUT'
+    );
+
+    if (failed.length === 0) {
+      return 'No specific failed check runs detected.';
+    }
+
+    const lines: string[] = [];
+    for (const f of failed) {
+      lines.push(`- Check: ${f.name} (Status: ${f.state})`);
+      if (f.description) lines.push(`  Description: ${f.description}`);
+      if (f.link) lines.push(`  Log Link: ${f.link}`);
+    }
+
+    return lines.join('\n');
+  } catch (err) {
+    return `Unable to fetch detailed CI logs: ${(err as Error).message}`;
+  }
+}
+
+export async function fetchUnresolvedReviewComments(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  const query = `
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 30) {
+            nodes {
+              isResolved
+              path
+              line
+              comments(first: 10) {
+                nodes {
+                  author { login }
+                  body
+                  createdAt
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const res = await runGraphQL<{
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: {
+              nodes?: Array<{
+                isResolved: boolean;
+                path: string;
+                line?: number;
+                comments?: {
+                  nodes?: Array<{
+                    author?: { login: string };
+                    body: string;
+                    createdAt: string;
+                  }>;
+                };
+              }>;
+            };
+          };
+        };
+      };
+    }>(query, { owner, repo, number });
+
+    const threads = res?.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
+    const unresolved = threads.filter((t) => !t.isResolved);
+
+    if (unresolved.length === 0) {
+      return 'No unresolved review comment threads found.';
+    }
+
+    const lines: string[] = [];
+    for (let i = 0; i < unresolved.length; i++) {
+      const t = unresolved[i];
+      const comments = t.comments?.nodes || [];
+      const location = t.line ? `${t.path}:${t.line}` : t.path;
+      lines.push(`--- Thread #${i + 1} at ${location} ---`);
+      for (const c of comments) {
+        const author = c.author?.login || 'reviewer';
+        lines.push(`@${author}: ${c.body.trim()}`);
+      }
+    }
+
+    return lines.join('\n\n');
+  } catch (err) {
+    return `Unable to fetch review comment threads: ${(err as Error).message}`;
+  }
+}
+
+export async function fetchPrDiffSummary(
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('gh', [
+      'pr',
+      'diff',
+      String(number),
+      '--repo',
+      `${owner}/${repo}`,
+      '--stat',
+    ]);
+    return stdout.trim();
+  } catch (err) {
+    return `Unable to fetch diff summary: ${(err as Error).message}`;
+  }
+}

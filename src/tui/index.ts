@@ -13,11 +13,12 @@ import { renderSettingsModal, SETTINGS_ITEMS, POLL_INTERVALS, RECENT_WINDOW_OPTI
 import { renderDiffModal, parseAndColorizeDiff } from './diff.js';
 import { renderLogsModal, loadPRLogFile } from './logs.js';
 import { renderStatsModal } from './stats.js';
+import { loadAgentStats, calculateAgentStats } from '../agents/stats.js';
 import { renderBackfillModal } from './backfill.js';
 import { renderHelpModal } from './help.js';
 import { calculateStats, backfillHistoricalStats, backfill30DayStats } from '../stats/index.js';
 import { renderFooter, type FooterMode, type FooterContext } from './footer.js';
-import { getRepoAgent, setRepoAgent, getAvailableAgents, saveState } from '../app/state.js';
+import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getAvailableAgents, saveState, saveSettings } from '../app/state.js';
 import { getPRDiff } from '../watcher/gh.js';
 import { colors, rgbColor } from './colors.js';
 import type { BackfillProgress, LeaderboardSort } from '../app/types.js';
@@ -62,6 +63,7 @@ export function createTUI(
   let isLogsModalOpen = false;
   let logsScrollOffset = 0;
   let isStatsModalOpen = false;
+  let statsActiveTab: 'pr' | 'agents' = 'pr';
   let statsTimeframe: StatsTimeframe = '30d';
   let statsSortBy: LeaderboardSort = 'merged30';
   let isHelpModalOpen = false;
@@ -329,6 +331,7 @@ export function createTUI(
         scope: data.viewScope || 'mine',
         currentUser: data.currentUser,
         workers: data.workers,
+        repoPolicies: data.repoPolicies,
         teamProfiles: data.teamProfiles,
         spinnerTick,
       });
@@ -347,6 +350,7 @@ export function createTUI(
         inputBuffer,
         selectedAgent: currentChosenAgent,
         availableAgents,
+        repoMode: selectedPR ? getRepoMode(data, selectedPR.key) : undefined,
         message: statusMessage,
       };
       allLines.push(renderFooter(footerContext, Math.max(10, layout.width - 2)));
@@ -482,8 +486,12 @@ export function createTUI(
         const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
         const stats = calculateStats(data, statsTimeframe, data.viewScope || 'mine', statsSortBy);
+        const agentStatsStore = loadAgentStats();
+        const agentStats = calculateAgentStats(agentStatsStore.records, 30);
         const modalLines = renderStatsModal({
           stats,
+          agentStats,
+          activeTab: statsActiveTab,
           timeframe: statsTimeframe,
           scope: data.viewScope || 'mine',
           sortBy: statsSortBy,
@@ -853,9 +861,26 @@ export function createTUI(
 
       // Handle Stats Pop-up Modal Keyboard Actions
       if (isStatsModalOpen) {
-        if (key === '\x1b' || key === 'q' || key === 'Q' || key === 'p' || key === 'P' || key === '\x0d') { // Esc, Enter, q, p closes stats
+        if (key === '\x1b' || key === 'q' || key === 'Q' || key === '\x0d') {
           isStatsModalOpen = false;
           render();
+          return;
+        }
+
+        if (key === 'a' || key === 'A') { // Switch to Agent Telemetry tab
+          statsActiveTab = statsActiveTab === 'agents' ? 'pr' : 'agents';
+          render();
+          return;
+        }
+
+        if (key === 'p' || key === 'P') { // Switch back to PR tab or close
+          if (statsActiveTab === 'agents') {
+            statsActiveTab = 'pr';
+            render();
+          } else {
+            isStatsModalOpen = false;
+            render();
+          }
           return;
         }
 
@@ -1245,6 +1270,20 @@ export function createTUI(
           return;
         }
 
+        if (key === 'm' || key === 'M') { // Toggle repo mode: OFF -> DRY-RUN -> LIVE
+          if (pr) {
+            const modes: ('off' | 'dry-run' | 'live')[] = ['off', 'dry-run', 'live'];
+            const currentMode = getRepoMode(data, pr.key);
+            const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            setRepoPolicy(data, pr.key, { ...existingPolicy, mode: nextMode });
+            saveSettings(data);
+            saveState(data);
+            render();
+          }
+          return;
+        }
+
         // Direct number key selection
         const num = parseInt(key, 10);
         if (!isNaN(num) && num >= 1 && num <= availableAgents.length) {
@@ -1268,11 +1307,11 @@ export function createTUI(
         if (key === '\x0d') { // Enter confirms selection, persists to repo, and opens prompt input
           const chosenAgent = availableAgents[selectedAgentIndex] || 'claude';
           if (pr) {
-            const currentRepoAgent = getRepoAgent(data, pr.key);
-            if (chosenAgent !== currentRepoAgent) {
-              setRepoAgent(data, pr.key, chosenAgent);
-              saveState(data);
-            }
+            setRepoAgent(data, pr.key, chosenAgent);
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            setRepoPolicy(data, pr.key, { ...existingPolicy, agent: chosenAgent });
+            saveSettings(data);
+            saveState(data);
           }
           footerMode = 'AGENT_INPUT';
           inputBuffer = '';

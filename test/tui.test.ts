@@ -368,7 +368,7 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('All Actions & Keybindings');
       expect(fullText).toContain('Navigation & Scope');
       expect(fullText).toContain('PR Triage & Operations');
-      expect(fullText).toContain('AI Agents & Background Worktrees');
+      expect(fullText).toContain('AI Agents & Automation');
       expect(fullText).toContain('Performance & Configuration');
       expect(fullText).toContain('[? / h]');
       expect(fullText).toContain('[b / B]');
@@ -438,11 +438,12 @@ describe('TUI Components & Engine', () => {
         availableAgents: ['claude', 'agy', 'gemini', 'pi'],
       }, 100);
       const text = stripAnsi(selectFooter);
-      expect(text).toContain('Agent for web-frontend:');
+      expect(text).toContain('acme-corp/web-frontend:');
       expect(text).toContain('[1] claude');
       expect(text).toContain('[2] agy');
       expect(text).toContain('[3] gemini');
-      expect(text).toContain('[Enter] accept');
+      expect(text).toContain('Mode:');
+      expect(text).toContain('[Enter] save & prompt');
     });
   });
 
