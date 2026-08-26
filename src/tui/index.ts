@@ -16,9 +16,10 @@ import { renderStatsModal } from './stats.js';
 import { loadAgentStats, calculateAgentStats } from '../agents/stats.js';
 import { renderBackfillModal } from './backfill.js';
 import { renderHelpModal } from './help.js';
+import { renderAgentModal, PLAYBOOK_OPTIONS } from './agentModal.js';
 import { calculateStats, backfillHistoricalStats, backfill30DayStats } from '../stats/index.js';
 import { renderFooter, type FooterMode, type FooterContext } from './footer.js';
-import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getAvailableAgents, saveState, saveSettings } from '../app/state.js';
+import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getRepoRoleAgent, getAvailableAgents, saveState, saveSettings } from '../app/state.js';
 import { getPRDiff } from '../watcher/gh.js';
 import { colors, rgbColor } from './colors.js';
 import type { BackfillProgress, LeaderboardSort } from '../app/types.js';
@@ -69,6 +70,8 @@ export function createTUI(
   let isHelpModalOpen = false;
   let isBackfillModalOpen = false;
   let backfillProgress: BackfillProgress | null = null;
+  let isAgentModalOpen = false;
+  let agentModalPlaybookIndex = 0;
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
   let selectedPlaybookIndex = 0;
@@ -574,6 +577,29 @@ export function createTUI(
         }
       }
 
+      // 13. Agent & Automation Modal Overlay (if open)
+      if (isAgentModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isDetailsModalOpen && !isStatsModalOpen && !isHelpModalOpen && !isBackfillModalOpen) {
+        const headerOffset = bannerLines.length + 5;
+        const modalLines = renderAgentModal(
+          data,
+          selectedPR,
+          { selectedIndex: agentModalPlaybookIndex },
+          layout.width,
+          layout.height
+        );
+        const modalWidth = Math.min(84, Math.max(60, layout.width - 4));
+        const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
+        const leftPad = ' '.repeat(xStart);
+        const rightPad = ' '.repeat(Math.max(0, layout.width - xStart - modalWidth));
+
+        for (let r = 0; r < modalLines.length; r++) {
+          const lineIdx = headerOffset + r;
+          if (lineIdx < allLines.length - 2) {
+            allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
+          }
+        }
+      }
+
       // Assemble buffer: strictly bounded to layout.height to prevent terminal auto-scroll / top logo cutoff
       let buffer = '\x1B[H\x1B[?25l';
       const linesToOutput = allLines.slice(0, layout.height);
@@ -1009,14 +1035,12 @@ export function createTUI(
           return;
         }
 
-        if (key === 'a') { // Agent from modal
+        if (key === 'a') { // Open Agent & Automation Modal
           const pr = getSelectedPR();
           if (pr) {
             isDetailsModalOpen = false;
-            availableAgents = getAvailableAgents(data);
-            const currentAgent = getRepoAgent(data, pr.key);
-            selectedAgentIndex = Math.max(0, availableAgents.indexOf(currentAgent));
-            footerMode = 'AGENT_SELECT';
+            isAgentModalOpen = true;
+            agentModalPlaybookIndex = 0;
             render();
           }
           return;
@@ -1238,14 +1262,12 @@ export function createTUI(
           return;
         }
 
-        if (key === 'a') { // Dispatch new Agent from logs modal
+        if (key === 'a') { // Open Agent & Automation Modal
           const pr = getSelectedPR();
           if (pr) {
             isLogsModalOpen = false;
-            availableAgents = getAvailableAgents(data);
-            const currentAgent = getRepoAgent(data, pr.key);
-            selectedAgentIndex = Math.max(0, availableAgents.indexOf(currentAgent));
-            footerMode = 'AGENT_SELECT';
+            isAgentModalOpen = true;
+            agentModalPlaybookIndex = 0;
             render();
           }
           return;
@@ -1266,6 +1288,121 @@ export function createTUI(
           return;
         }
 
+        return;
+      }
+
+      // Handle Agent & Automation Modal Keybindings
+      if (isAgentModalOpen) {
+        const pr = getSelectedPR();
+        if (key === '\x1b' || key === 'q') { // Esc or q closes modal
+          isAgentModalOpen = false;
+          render();
+          return;
+        }
+
+        if (key === 'm' || key === 'M') { // Toggle repo mode: OFF -> DRY-RUN -> LIVE
+          if (pr) {
+            const modes: ('off' | 'dry-run' | 'live')[] = ['off', 'dry-run', 'live'];
+            const currentMode = getRepoMode(data, pr.key);
+            const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            setRepoPolicy(data, pr.key, { ...existingPolicy, mode: nextMode });
+            saveSettings(data);
+            saveState(data);
+            render();
+          }
+          return;
+        }
+
+        if (key === '1') { // Cycle Reviewer Agent
+          if (pr) {
+            availableAgents = getAvailableAgents(data);
+            const current = getRepoRoleAgent(data, pr.key, 'reviewer');
+            const nextAgent = availableAgents[(availableAgents.indexOf(current) + 1) % availableAgents.length] || 'claude';
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            const agents = { ...(existingPolicy.agents || {}), reviewer: nextAgent };
+            setRepoPolicy(data, pr.key, { ...existingPolicy, agents });
+            saveSettings(data);
+            saveState(data);
+            render();
+          }
+          return;
+        }
+
+        if (key === '2') { // Cycle Fixer Agent
+          if (pr) {
+            availableAgents = getAvailableAgents(data);
+            const current = getRepoRoleAgent(data, pr.key, 'fixer');
+            const nextAgent = availableAgents[(availableAgents.indexOf(current) + 1) % availableAgents.length] || 'agy';
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            const agents = { ...(existingPolicy.agents || {}), fixer: nextAgent };
+            setRepoPolicy(data, pr.key, { ...existingPolicy, agents });
+            saveSettings(data);
+            saveState(data);
+            render();
+          }
+          return;
+        }
+
+        if (key === '3') { // Cycle CI Repair Agent
+          if (pr) {
+            availableAgents = getAvailableAgents(data);
+            const current = getRepoRoleAgent(data, pr.key, 'ciRepair');
+            const nextAgent = availableAgents[(availableAgents.indexOf(current) + 1) % availableAgents.length] || 'agy';
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            const agents = { ...(existingPolicy.agents || {}), ciRepair: nextAgent };
+            setRepoPolicy(data, pr.key, { ...existingPolicy, agents });
+            saveSettings(data);
+            saveState(data);
+            render();
+          }
+          return;
+        }
+
+        if (key === '\x1b[A' || key === 'k') { // Up
+          agentModalPlaybookIndex = (agentModalPlaybookIndex - 1 + PLAYBOOK_OPTIONS.length) % PLAYBOOK_OPTIONS.length;
+          render();
+          return;
+        }
+
+        if (key === '\x1b[B' || key === 'j') { // Down
+          agentModalPlaybookIndex = (agentModalPlaybookIndex + 1) % PLAYBOOK_OPTIONS.length;
+          render();
+          return;
+        }
+
+        // Direct hotkey dispatch or Enter
+        let selectedPlaybookKey: string | null = null;
+        if (key === 'r' || key === 'R') selectedPlaybookKey = 'preflight-review';
+        else if (key === 'c' || key === 'C') selectedPlaybookKey = 'ci-repair';
+        else if (key === 'f' || key === 'F') selectedPlaybookKey = 'address-comments';
+        else if (key === 'b' || key === 'B') selectedPlaybookKey = 'rebase-resolver';
+        else if (key === 'x' || key === 'X') selectedPlaybookKey = 'custom...';
+        else if (key === '\x0d') selectedPlaybookKey = PLAYBOOK_OPTIONS[agentModalPlaybookIndex].key;
+
+        if (selectedPlaybookKey) {
+          isAgentModalOpen = false;
+          if (selectedPlaybookKey === 'custom...') {
+            footerMode = 'AGENT_INPUT';
+            inputBuffer = '';
+          } else {
+            if (pr) {
+              let agentToRun = 'claude';
+              if (selectedPlaybookKey === 'preflight-review') agentToRun = getRepoRoleAgent(data, pr.key, 'reviewer');
+              else if (selectedPlaybookKey === 'address-comments') agentToRun = getRepoRoleAgent(data, pr.key, 'fixer');
+              else if (selectedPlaybookKey === 'ci-repair') agentToRun = getRepoRoleAgent(data, pr.key, 'ciRepair');
+              else agentToRun = getRepoAgent(data, pr.key);
+
+              onAction('agent', {
+                pr,
+                agentName: agentToRun,
+                playbookName: selectedPlaybookKey,
+              });
+            }
+          }
+          render();
+          return;
+        }
         return;
       }
 
@@ -1635,13 +1772,11 @@ export function createTUI(
         return;
       }
 
-      if (key === 'a') { // Agent - Step 1 Agent Picker
+      if (key === 'a') { // Open Agent & Automation Modal
         const pr = getSelectedPR();
         if (pr) {
-          availableAgents = getAvailableAgents(data);
-          const currentAgent = getRepoAgent(data, pr.key);
-          selectedAgentIndex = Math.max(0, availableAgents.indexOf(currentAgent));
-          footerMode = 'AGENT_SELECT';
+          isAgentModalOpen = true;
+          agentModalPlaybookIndex = 0;
           render();
         }
         return;

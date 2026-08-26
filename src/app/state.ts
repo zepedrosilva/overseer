@@ -299,6 +299,21 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
     if (parsed.workers && typeof parsed.workers === 'object') {
       for (const [k, v] of Object.entries(parsed.workers as Record<string, WorkerHandle>)) {
         if (v && typeof v === 'object') {
+          if (v.status === 'running') {
+            let isAlive = false;
+            if (v.pid && typeof v.pid === 'number') {
+              try {
+                process.kill(v.pid, 0);
+                isAlive = true;
+              } catch {
+                isAlive = false;
+              }
+            }
+            if (!isAlive) {
+              v.status = 'interrupted';
+              v.error = 'Process interrupted on application restart';
+            }
+          }
           workers.set(k, v);
         }
       }
@@ -312,9 +327,12 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
     let historicalStats: HistoricalStatsStore = { records: [] };
     if (parsed.historicalStats && typeof parsed.historicalStats === 'object') {
       const histObj = parsed.historicalStats as Record<string, unknown>;
-      const records = Array.isArray(histObj.records)
-        ? (histObj.records as any[]).filter((r: any) => r && r.key && r.createdAt)
-        : [];
+      const rawRecords = Array.isArray(histObj.records) ? histObj.records : [];
+      const records = rawRecords.filter((r): r is HistoricalPrRecord => {
+        if (!r || typeof r !== 'object') return false;
+        const rec = r as Record<string, unknown>;
+        return Boolean(rec.key && rec.createdAt);
+      });
       const memberWatermarks = (histObj.memberWatermarks && typeof histObj.memberWatermarks === 'object')
         ? (histObj.memberWatermarks as Record<string, MemberBackfillWatermark>)
         : undefined;
@@ -491,6 +509,21 @@ export function getRepoMode(
 ): RepoPolicyMode {
   const policy = getRepoPolicy(data, repo);
   return policy?.mode || 'off';
+}
+
+export function getRepoRoleAgent(
+  data: AppState,
+  repo: { owner: string; repo: string } | string,
+  role: 'reviewer' | 'fixer' | 'ciRepair'
+): string {
+  const policy = getRepoPolicy(data, repo);
+  if (policy?.agents?.[role]) {
+    return policy.agents[role]!;
+  }
+  if (policy?.agent) {
+    return policy.agent;
+  }
+  return getRepoAgent(data, repo);
 }
 
 export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile {

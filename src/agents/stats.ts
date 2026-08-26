@@ -119,6 +119,7 @@ export function calculateAgentStats(
       successCount: number;
       failedCount: number;
       successRate: number;
+      totalDuration: number;
       avgDurationMs: number;
       playbookCounts: Record<string, number>;
       topPlaybook?: string;
@@ -132,6 +133,7 @@ export function calculateAgentStats(
       successCount: number;
       failedCount: number;
       successRate: number;
+      totalDuration: number;
       avgDurationMs: number;
       repoCounts: Record<string, number>;
       topRepo?: string;
@@ -170,6 +172,7 @@ export function calculateAgentStats(
         successCount: 0,
         failedCount: 0,
         successRate: 0,
+        totalDuration: 0,
         avgDurationMs: 0,
         playbookCounts: {},
       };
@@ -177,6 +180,7 @@ export function calculateAgentStats(
     byAgent[agent].runs++;
     if (isSuccess) byAgent[agent].successCount++;
     else byAgent[agent].failedCount++;
+    byAgent[agent].totalDuration = (byAgent[agent].totalDuration || 0) + (r.durationMs || 0);
     const pb = r.playbookName || 'custom';
     byAgent[agent].playbookCounts[pb] = (byAgent[agent].playbookCounts[pb] || 0) + 1;
 
@@ -187,6 +191,7 @@ export function calculateAgentStats(
         successCount: 0,
         failedCount: 0,
         successRate: 0,
+        totalDuration: 0,
         avgDurationMs: 0,
         repoCounts: {},
       };
@@ -194,6 +199,7 @@ export function calculateAgentStats(
     byPlaybook[pb].runs++;
     if (isSuccess) byPlaybook[pb].successCount++;
     else byPlaybook[pb].failedCount++;
+    byPlaybook[pb].totalDuration = (byPlaybook[pb].totalDuration || 0) + (r.durationMs || 0);
     const repoSlug = `${r.prKey.owner}/${r.prKey.repo}`.toLowerCase();
     byPlaybook[pb].repoCounts[repoSlug] = (byPlaybook[pb].repoCounts[repoSlug] || 0) + 1;
 
@@ -238,7 +244,7 @@ export function calculateAgentStats(
       successCount: stat.successCount,
       failedCount: stat.failedCount,
       successRate: stat.runs > 0 ? (stat.successCount / stat.runs) * 100 : 0,
-      avgDurationMs: stat.runs > 0 ? (totalDuration / stat.runs) : 0,
+      avgDurationMs: stat.runs > 0 ? (stat.totalDuration / stat.runs) : 0,
       topPlaybook: topPb || undefined,
     };
   }
@@ -258,7 +264,7 @@ export function calculateAgentStats(
       successCount: stat.successCount,
       failedCount: stat.failedCount,
       successRate: stat.runs > 0 ? (stat.successCount / stat.runs) * 100 : 0,
-      avgDurationMs: stat.runs > 0 ? (totalDuration / stat.runs) : 0,
+      avgDurationMs: stat.runs > 0 ? (stat.totalDuration / stat.runs) : 0,
       topRepo: topR || undefined,
     };
   }

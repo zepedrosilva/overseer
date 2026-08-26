@@ -207,15 +207,32 @@ export function startApiServer(
 
     // ── POST /actions/:action or POST /action/:type ───────────────────────
     if (req.method === 'POST' && (pathname.startsWith('/actions/') || pathname.startsWith('/action/'))) {
-      const actionType = pathname.split('/').pop() as ApiActionType;
+      const rawAction = pathname.split('/').pop() as string;
+      const validActions: ApiActionType[] = ['poll', 'recheck', 'merge', 'close', 'comment', 'agent', 'cancel-agent', 'open', 'backfill'];
+      if (!validActions.includes(rawAction as ApiActionType)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Invalid action: ${rawAction}` }));
+        return;
+      }
+      const actionType = rawAction as ApiActionType;
+
       let dataStr = '';
+      let isTooLarge = false;
 
       req.on('data', (chunk) => {
         dataStr += chunk;
+        if (dataStr.length > 64 * 1024) { // 64 KB cap
+          isTooLarge = true;
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Payload too large (max 64 KB)' }));
+          req.destroy();
+        }
       });
 
       req.on('end', () => {
-        const body: { id?: string; prompt?: string; comment?: string } = {};
+        if (isTooLarge) return;
+
+        const body: { id?: string; prompt?: string; comment?: string; text?: string; agentName?: string; playbookName?: string } = {};
         try {
           if (dataStr) {
             Object.assign(body, JSON.parse(dataStr));
@@ -243,7 +260,10 @@ export function startApiServer(
             id: body.id,
             pr: targetPR,
             prompt: body.prompt,
-            comment: body.comment,
+            comment: body.comment || body.text,
+            text: body.text || body.comment,
+            agentName: body.agentName,
+            playbookName: body.playbookName,
           });
         }
 
@@ -259,7 +279,7 @@ export function startApiServer(
     res.end(JSON.stringify({ error: 'Not found' }));
   });
 
-  server.listen(port);
+  server.listen(port, '127.0.0.1');
 
   return {
     server,

@@ -401,13 +401,13 @@ export async function pollAllRepos(
           data.prs.delete(keyStr);
         }
       }
+    }
 
-      // Evaluate autonomous delegation policies on active PRs
-      try {
-        await evaluateAutonomousPolicies(data, config);
-      } catch (err) {
-        logWatcherMessage(`Autonomous policy evaluation error: ${(err as Error).message}`);
-      }
+    // Evaluate autonomous delegation policies on active PRs (runs for all modes)
+    try {
+      await evaluateAutonomousPolicies(data, config);
+    } catch (err) {
+      logWatcherMessage(`Autonomous policy evaluation error: ${(err as Error).message}`);
     }
   } finally {
     data.isPolling = false;

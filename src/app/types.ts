@@ -184,7 +184,8 @@ export interface WorkerHandle {
   finishedAt?: number;
   pid?: number;
   logPath?: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run';
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
+  error?: string;
 }
 
 // ── Agent Telemetry & Analytics Models ──────────────────────────────────────
@@ -200,7 +201,7 @@ export interface AgentExecutionRecord {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
-  status: 'completed' | 'failed' | 'cancelled' | 'dry-run';
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
   exitCode?: number;
   error?: string;
   summary?: string;
@@ -257,9 +258,16 @@ export interface AgentAggregatedStats {
 
 export type RepoPolicyMode = 'off' | 'dry-run' | 'live';
 
+export interface RepoPolicyAgents {
+  reviewer?: string;
+  fixer?: string;
+  ciRepair?: string;
+}
+
 export interface RepoPolicyConfig {
   mode?: RepoPolicyMode;
   agent?: string;
+  agents?: RepoPolicyAgents;
   triggers?: ('CiFailing' | 'ChangesRequested' | 'Reviewing')[];
   allowedPlaybooks?: string[];
 }
@@ -551,5 +559,13 @@ export type ApiActionType =
 
 export type ApiActionHandler = (
   action: ApiActionType,
-  payload: { id?: string; pr?: PrState | null; prompt?: string; comment?: string }
+  payload: {
+    id?: string;
+    pr?: PrState | null;
+    prompt?: string;
+    comment?: string;
+    text?: string;
+    agentName?: string;
+    playbookName?: string;
+  }
 ) => void | Promise<void>;

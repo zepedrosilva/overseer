@@ -18,6 +18,7 @@ import { renderHelpModal } from '../src/tui/help.js';
 import { renderDiffModal } from '../src/tui/diff.js';
 import { renderLogsModal } from '../src/tui/logs.js';
 import { renderFooter } from '../src/tui/footer.js';
+import { renderAgentModal } from '../src/tui/agentModal.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import { calculateStats } from '../src/stats/index.js';
 import type { PrState } from '../src/app/types.js';
@@ -486,6 +487,27 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('[LOCAL API]');
       expect(fullText).toContain('Local API Server');
       expect(fullText).toContain('[Esc to save & close]');
+    });
+  });
+
+  describe('Agent & Automation Modal', () => {
+    it('renders agent modal with policy mode, multi-agent roles, and playbooks', () => {
+      const state = createEmptyState();
+      const pr = createMockPR(15);
+      const lines = renderAgentModal(state, pr, { selectedIndex: 0 }, 90, 24);
+
+      const fullText = lines.map(stripAnsi).join('\n');
+      expect(fullText).toContain('Agent & Automation Config: acme-corp/web-frontend #15');
+      expect(fullText).toContain('REPOSITORY AUTOMATION POLICY');
+      expect(fullText).toContain('Reviewer Agent:');
+      expect(fullText).toContain('Fixer Agent:');
+      expect(fullText).toContain('CI Repair Agent:');
+      expect(fullText).toContain('ON-DEMAND PLAYBOOK DISPATCH');
+      expect(fullText).toContain('Pre-flight Code Review');
+      expect(fullText).toContain('CI Failure Auto-Repair');
+      expect(fullText).toContain('Address Review Comments');
+      expect(fullText).toContain('Rebase & Conflict Resolver');
+      expect(fullText).toContain('[Esc] Close');
     });
   });
 

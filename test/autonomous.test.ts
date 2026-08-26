@@ -223,4 +223,44 @@ describe('Autonomous Policy Evaluator & Safety Circuit Breakers', () => {
     await evaluateAutonomousPolicies(data, mockConfig);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('routes to specialized role agents (reviewer=claude, fixer=agy) based on policy', async () => {
+    const data = createEmptyState();
+    const prReview = createPrFixture(5, 'Ready');
+    prReview.overallStatus = 'Reviewing';
+    upsertPR(data, prReview);
+
+    setRepoPolicy(data, 'acme-corp/web-frontend', {
+      mode: 'live',
+      agent: 'pi',
+      agents: {
+        reviewer: 'claude',
+        fixer: 'agy',
+        ciRepair: 'agy',
+      },
+      triggers: ['Reviewing'],
+      allowedPlaybooks: ['preflight-review'],
+    });
+
+    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
+      sessionId: 'sess-4',
+      prKey: prReview.key,
+      agentName: 'claude',
+      command: 'mock',
+      worktreePath: 'mock',
+      branch: prReview.branch,
+      startedAt: Date.now(),
+      status: 'running',
+    });
+
+    await evaluateAutonomousPolicies(data, mockConfig);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'claude',
+        playbookName: 'preflight-review',
+      })
+    );
+  });
 });

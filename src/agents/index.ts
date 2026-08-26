@@ -2,9 +2,12 @@
 // Manages agent definitions, playbook interpolation, local worktree processes,
 // remote bot comment dispatching, and durable telemetry recording.
 
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
+
+const execFileAsync = promisify(execFile);
 import type {
   AppState,
   PrState,
@@ -54,19 +57,19 @@ export function interpolateAgentCommand(
   const defaultPrompt = params.prompt || DEFAULT_AGENT_PROMPT;
 
   return template
-    .replace(/\{pr\}/g, String(params.pr))
-    .replace(/\{branch\}/g, params.branch)
-    .replace(/\{baseBranch\}/g, params.baseBranch || 'main')
-    .replace(/\{owner\}/g, params.owner)
-    .replace(/\{repo\}/g, params.repo)
-    .replace(/\{url\}/g, params.url)
-    .replace(/\{worktree\}/g, params.worktree || '')
-    .replace(/\{ciLogs\}/g, params.ciLogs || 'No CI logs provided.')
-    .replace(/\{comments\}/g, params.comments || 'No unresolved comments.')
-    .replace(/\{diffSummary\}/g, params.diffSummary || 'No diff summary provided.')
-    .replace(/\{failingCheck\}/g, params.failingCheck || 'test')
-    .replace(/\{playbook\}/g, params.playbook || 'custom')
-    .replace(/\{prompt\}/g, defaultPrompt);
+    .replace(/\{pr\}/g, () => String(params.pr))
+    .replace(/\{branch\}/g, () => params.branch)
+    .replace(/\{baseBranch\}/g, () => params.baseBranch || 'main')
+    .replace(/\{owner\}/g, () => params.owner)
+    .replace(/\{repo\}/g, () => params.repo)
+    .replace(/\{url\}/g, () => params.url)
+    .replace(/\{worktree\}/g, () => params.worktree || '')
+    .replace(/\{ciLogs\}/g, () => params.ciLogs || 'No CI logs provided.')
+    .replace(/\{comments\}/g, () => params.comments || 'No unresolved comments.')
+    .replace(/\{diffSummary\}/g, () => params.diffSummary || 'No diff summary provided.')
+    .replace(/\{failingCheck\}/g, () => params.failingCheck || 'test')
+    .replace(/\{playbook\}/g, () => params.playbook || 'custom')
+    .replace(/\{prompt\}/g, () => defaultPrompt);
 }
 
 export function buildAgentCommand(
@@ -118,6 +121,43 @@ export interface DispatchOptions {
   diffSummary?: string;
   failingCheck?: string;
   cwd?: string;
+}
+
+export function parseShellArgs(commandStr: string): { bin: string; args: string[] } {
+  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+  const tokens: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(commandStr)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1]);
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2]);
+    } else {
+      tokens.push(match[0]);
+    }
+  }
+  const bin = tokens[0] || 'echo';
+  const args = tokens.slice(1);
+  return { bin, args };
+}
+
+export function getSpawnExecution(
+  agentName: string,
+  commandStr: string,
+  promptText: string,
+  definition: AgentDefinition
+): { bin: string; args: string[] } {
+  const norm = agentName.toLowerCase();
+  if (norm === 'claude') {
+    return { bin: 'claude', args: ['-p', promptText] };
+  }
+  if (norm === 'agy' || norm === 'gemini') {
+    return { bin: 'agy', args: [promptText] };
+  }
+  if (norm === 'pi') {
+    return { bin: 'pi', args: [promptText] };
+  }
+  return parseShellArgs(commandStr);
 }
 
 export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHandle> {
@@ -185,12 +225,13 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     appendLog(data, pr.key, `[DRY-RUN] Command: ${command}`);
     if (logStream) {
       logStream.write(
-        `\n=== [DRY-RUN SIMULATION ${startTimeIso}] ===\n` +
-          `Agent: ${agentName} (${driver})\n` +
-          `Playbook: ${playbookName}\n` +
-          `Prompt:\n${promptText}\n` +
-          `Command: ${command}\n` +
-          `=== [END DRY-RUN] ===\n\n`
+        `┌─ 🤖 [SIMULATION] ${agentName} · ${playbookName} · 🟡 DRY-RUN ────────────────────────\n` +
+          `│ Time:      ${startTimeIso}\n` +
+          `│ PR:        ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
+          `│ Playbook:  ${playbookName}\n` +
+          `├─ Planned Prompt & Context ─────────────────────────────────────────────────────────────\n` +
+          `${promptText}\n\n` +
+          `└─ [End Simulation: ${new Date().toISOString()}] ─────────────────────────────────────────\n\n`
       );
       logStream.end();
     }
@@ -315,16 +356,19 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
 
   if (logStream) {
     logStream.write(
-      `\n=== [LOCAL AGENT DISPATCH: ${agentName} (${playbookName}) at ${startTimeIso}] ===\n` +
-        `Command: ${command}\n` +
-        `Worktree: ${worktreePath}\n\n`
+      `┌─ 🤖 [EXECUTION] ${agentName} · ${playbookName} · 🟢 LIVE ─────────────────────────────\n` +
+        `│ Started:   ${startTimeIso}\n` +
+        `│ PR:        ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
+        `│ Worktree:  ${worktreePath}\n` +
+        `├─ Live Output Stream ───────────────────────────────────────────────────────────────────\n`
     );
   }
 
-  const child = spawn(command, {
-    shell: true,
+  const { bin, args } = getSpawnExecution(agentName, command, promptText, definition);
+  const child = spawn(bin, args, {
+    shell: false,
     cwd: worktreePath,
-    detached: true,
+    detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
@@ -355,8 +399,11 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   setWorker(data, pr.key, worker);
   saveState(data, undefined, cwd);
 
+  let capturedOutput = '';
+
   child.stdout?.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
+    capturedOutput += text;
     try {
       logStream?.write(text);
     } catch {
@@ -370,6 +417,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
 
   child.stderr?.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
+    capturedOutput += text;
     try {
       logStream?.write(text);
     } catch {
@@ -377,14 +425,16 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     }
   });
 
-  child.on('close', (code) => {
+  child.on('close', async (code) => {
+    const finishedAt = Date.now();
+    const durationMs = finishedAt - startTime;
+    const durationSec = (durationMs / 1000).toFixed(1);
     try {
+      logStream?.write(`\n└─ [Completed in ${durationSec}s · Exit Code: ${code}] ──────────────────────────────────────\n\n`);
       logStream?.end();
     } catch {
       // Ignore end errors
     }
-    const finishedAt = Date.now();
-    const durationMs = finishedAt - startTime;
     worker.finishedAt = finishedAt;
 
     const isSuccess = code === 0;
@@ -394,6 +444,30 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
       appendLog(data, pr.key, `Agent '${agentName}' (${playbookName}) completed successfully`);
     } else {
       appendLog(data, pr.key, `Agent '${agentName}' (${playbookName}) exited with code ${code}`);
+    }
+
+    // If preflight-review completed with findings, publish to GitHub PR
+    if (playbookName === 'preflight-review' && isSuccess && capturedOutput.trim().length > 0) {
+      try {
+        await addComment(pr.key.owner, pr.key.repo, pr.key.number, capturedOutput.trim());
+        appendLog(data, pr.key, `Published preflight review findings to GitHub PR #${pr.key.number}`);
+      } catch (err) {
+        appendLog(data, pr.key, `Failed to post review findings to GitHub: ${(err as Error).message}`);
+      }
+    }
+
+    // If fixer completed, check for changes and push
+    if ((playbookName === 'address-comments' || playbookName === 'ci-repair') && isSuccess) {
+      try {
+        const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
+        if (statusOut.trim().length > 0) {
+          await execFileAsync('git', ['commit', '-am', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
+          await execFileAsync('git', ['push', '--force-with-lease', 'origin', pr.branch], { cwd: worktreePath });
+          appendLog(data, pr.key, `Fixer agent pushed fixes to branch '${pr.branch}'`);
+        }
+      } catch {
+        // Fallback
+      }
     }
 
     const execRecord: AgentExecutionRecord = {

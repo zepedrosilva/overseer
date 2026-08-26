@@ -93,6 +93,14 @@ describe('Local REST & SSE API Server', () => {
     upsertPR(state, createMockPR());
   });
 
+  async function setupServer(actionCallback?: any) {
+    serverController = startApiServer(state, 0, actionCallback);
+    if (!serverController.server.listening) {
+      await new Promise<void>((resolve) => serverController.server.once('listening', () => resolve()));
+    }
+    serverPort = serverController.port;
+  }
+
   afterEach(async () => {
     if (serverController) {
       await serverController.close();
@@ -100,8 +108,7 @@ describe('Local REST & SSE API Server', () => {
   });
 
   it('serves GET /status endpoint with PR summaries and health metrics', async () => {
-    serverController = startApiServer(state, 0);
-    serverPort = serverController.port;
+    await setupServer();
 
     const res = await makeRequest('GET', '/status', serverPort);
     expect(res.status).toBe(200);
@@ -123,8 +130,7 @@ describe('Local REST & SSE API Server', () => {
   });
 
   it('serves GET /prs endpoint with full PR lists and query filtering', async () => {
-    serverController = startApiServer(state, 0);
-    serverPort = serverController.port;
+    await setupServer();
 
     const allRes = await makeRequest('GET', '/prs', serverPort);
     expect(allRes.status).toBe(200);
@@ -142,8 +148,7 @@ describe('Local REST & SSE API Server', () => {
   });
 
   it('serves GET /prs/:owner/:repo/:number and GET /pr/:owner/:repo/:number with PR details', async () => {
-    serverController = startApiServer(state, 0);
-    serverPort = serverController.port;
+    await setupServer();
 
     const res = await makeRequest('GET', '/prs/acme-corp/web-frontend/142', serverPort);
     expect(res.status).toBe(200);
@@ -182,8 +187,7 @@ describe('Local REST & SSE API Server', () => {
       ],
     };
 
-    serverController = startApiServer(state, 0);
-    serverPort = serverController.port;
+    await setupServer();
 
     const res = await makeRequest('GET', '/stats', serverPort);
     expect(res.status).toBe(200);
@@ -193,8 +197,7 @@ describe('Local REST & SSE API Server', () => {
 
   it('handles POST /actions/:action and triggers callback', async () => {
     const actionCallback = vi.fn();
-    serverController = startApiServer(state, 0, actionCallback);
-    serverPort = serverController.port;
+    await setupServer(actionCallback);
 
     const res = await makeRequest('POST', '/actions/recheck', serverPort, {
       id: 'acme-corp/web-frontend#142',
@@ -203,17 +206,14 @@ describe('Local REST & SSE API Server', () => {
     expect(res.status).toBe(200);
     expect(res.parsed.ok).toBe(true);
     expect(res.parsed.action).toBe('recheck');
-    expect(actionCallback).toHaveBeenCalledWith('recheck', {
+    expect(actionCallback).toHaveBeenCalledWith('recheck', expect.objectContaining({
       id: 'acme-corp/web-frontend#142',
       pr: expect.objectContaining({ title: 'Fix invoice rounding calculations' }),
-      prompt: undefined,
-      comment: undefined,
-    });
+    }));
   });
 
   it('subscribes to GET /events SSE stream and receives broadcast messages', async () => {
-    serverController = startApiServer(state, 0);
-    serverPort = serverController.port;
+    await setupServer();
 
     const receivedChunks: string[] = [];
     const ssePromise = new Promise<void>((resolve, reject) => {

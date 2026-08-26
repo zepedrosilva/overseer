@@ -5,7 +5,7 @@
 
 import type { AppState, PrState, AppConfig, RepoPolicyConfig } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { getRepoPolicy, getRepoMode, appendLog } from '../app/state.js';
+import { getRepoPolicy, getRepoMode, getRepoRoleAgent, appendLog } from '../app/state.js';
 import { dispatchAgent } from '../agents/index.js';
 import {
   fetchFailedCiLogs,
@@ -113,11 +113,12 @@ export async function evaluateAutonomousPolicies(
         pr.ciChecks.find((c) => c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT')?.name ||
         'test';
 
+      const ciAgent = getRepoRoleAgent(data, pr.key, 'ciRepair');
       await dispatchAgent({
         data,
         pr,
         config,
-        agentName: policy.agent,
+        agentName: ciAgent,
         playbookName,
         trigger: 'autonomous_ci',
         mode: mode === 'dry-run' ? 'dry-run' : 'live',
@@ -166,11 +167,12 @@ export async function evaluateAutonomousPolicies(
         // Fallback
       }
 
+      const fixerAgent = getRepoRoleAgent(data, pr.key, 'fixer');
       await dispatchAgent({
         data,
         pr,
         config,
-        agentName: policy.agent,
+        agentName: fixerAgent,
         playbookName,
         trigger: 'autonomous_review',
         mode: mode === 'dry-run' ? 'dry-run' : 'live',
@@ -223,11 +225,12 @@ export async function evaluateAutonomousPolicies(
         // Fallback
       }
 
+      const reviewerAgent = getRepoRoleAgent(data, pr.key, 'reviewer');
       await dispatchAgent({
         data,
         pr,
         config,
-        agentName: policy.agent,
+        agentName: reviewerAgent,
         playbookName,
         trigger: 'autonomous_review',
         mode: mode === 'dry-run' ? 'dry-run' : 'live',
