@@ -138,7 +138,9 @@ export interface RepoHandle {
 export type AgentDriverType = 'local' | 'remote';
 
 export interface AgentDefinition {
-  command: string;
+  command?: string;
+  bin?: string;
+  args?: string[];
   description?: string;
   driver?: AgentDriverType;
   triggerTemplate?: string;
@@ -151,6 +153,7 @@ export interface PlaybookDefinition {
   includeCiLogs?: boolean;
   includeReviewComments?: boolean;
   includeDiff?: boolean;
+  readOnly?: boolean;
 }
 
 export interface AgentsConfigFile {
@@ -203,6 +206,7 @@ export interface AgentExecutionRecord {
   durationMs: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
   exitCode?: number;
+  signal?: string;
   error?: string;
   summary?: string;
 }

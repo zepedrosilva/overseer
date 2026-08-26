@@ -31,9 +31,18 @@ export function loadAgentStats(
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<AgentStatsStore>;
-    const records: AgentExecutionRecord[] = Array.isArray(parsed?.records)
-      ? (parsed.records as AgentExecutionRecord[])
-      : [];
+    const rawRecords = Array.isArray(parsed?.records) ? parsed.records : [];
+    const records: AgentExecutionRecord[] = rawRecords.filter((r): r is AgentExecutionRecord => {
+      return Boolean(
+        r &&
+        typeof r === 'object' &&
+        r.sessionId &&
+        r.prKey &&
+        typeof r.prKey.owner === 'string' &&
+        typeof r.prKey.repo === 'string' &&
+        typeof r.startedAt === 'string'
+      );
+    });
     return { records };
   } catch {
     return { records: [] };
@@ -61,7 +70,9 @@ export function saveAgentStats(
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(filePath, JSON.stringify(store, null, 2), 'utf-8');
+    const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, filePath);
   } catch {
     // Ignore write errors
   }
@@ -99,10 +110,16 @@ export function resetAgentStats(cwd: string = process.cwd()): void {
 
 export function calculateAgentStats(
   records: AgentExecutionRecord[],
-  timeframeDays: number = 30
+  timeframeDays: number = 30,
+  data?: {
+    repoPolicies?: Record<string, { mode?: RepoPolicyMode }>;
+    repoAgents?: Record<string, string>;
+    settings?: { defaultAgent?: string };
+  }
 ): AgentAggregatedStats {
   const cutoff = Date.now() - timeframeDays * 24 * 60 * 60 * 1000;
   const filtered = records.filter((r) => {
+    if (!r || !r.startedAt) return false;
     const ts = new Date(r.startedAt).getTime();
     return !isNaN(ts) && ts >= cutoff;
   });
@@ -200,11 +217,15 @@ export function calculateAgentStats(
     if (isSuccess) byPlaybook[pb].successCount++;
     else byPlaybook[pb].failedCount++;
     byPlaybook[pb].totalDuration = (byPlaybook[pb].totalDuration || 0) + (r.durationMs || 0);
-    const repoSlug = `${r.prKey.owner}/${r.prKey.repo}`.toLowerCase();
+    const repoSlug = r.prKey ? `${r.prKey.owner}/${r.prKey.repo}`.toLowerCase() : 'unknown';
     byPlaybook[pb].repoCounts[repoSlug] = (byPlaybook[pb].repoCounts[repoSlug] || 0) + 1;
 
     // 3. Group by Repo
     if (!byRepo[repoSlug]) {
+      const livePolicy = data?.repoPolicies?.[repoSlug] || data?.repoPolicies?.['*'];
+      const liveMode = livePolicy?.mode || (r.mode === 'dry-run' ? 'dry-run' : 'live');
+      const liveAgent = data?.repoAgents?.[repoSlug] || data?.settings?.defaultAgent || agent;
+
       byRepo[repoSlug] = {
         runs: 0,
         autoRuns: 0,
@@ -213,12 +234,13 @@ export function calculateAgentStats(
         failedCount: 0,
         successRate: 0,
         totalDuration: 0,
-        mode: r.mode === 'dry-run' ? 'dry-run' : 'live',
-        defaultAgent: agent,
+        mode: liveMode,
+        defaultAgent: liveAgent,
       };
     }
     byRepo[repoSlug].runs++;
-    if (r.trigger.startsWith('autonomous')) {
+    const trigger = typeof r.trigger === 'string' ? r.trigger : 'manual';
+    if (trigger.startsWith('autonomous')) {
       byRepo[repoSlug].autoRuns++;
     } else {
       byRepo[repoSlug].manualRuns++;
@@ -244,7 +266,7 @@ export function calculateAgentStats(
       successCount: stat.successCount,
       failedCount: stat.failedCount,
       successRate: stat.runs > 0 ? (stat.successCount / stat.runs) * 100 : 0,
-      avgDurationMs: stat.runs > 0 ? (stat.totalDuration / stat.runs) : 0,
+      avgDurationMs: stat.runs > 0 ? Math.round(stat.totalDuration / stat.runs) : 0,
       topPlaybook: topPb || undefined,
     };
   }
@@ -264,7 +286,7 @@ export function calculateAgentStats(
       successCount: stat.successCount,
       failedCount: stat.failedCount,
       successRate: stat.runs > 0 ? (stat.successCount / stat.runs) * 100 : 0,
-      avgDurationMs: stat.runs > 0 ? (stat.totalDuration / stat.runs) : 0,
+      avgDurationMs: stat.runs > 0 ? Math.round(stat.totalDuration / stat.runs) : 0,
       topRepo: topR || undefined,
     };
   }

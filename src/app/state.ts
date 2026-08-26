@@ -24,6 +24,7 @@ import type {
   RepoPolicyMode,
 } from './types.js';
 import { prKeyToString } from './types.js';
+import { BUILTIN_PRESETS } from '../agents/presets.js';
 
 export const LOCAL_OVERSEER_DIR = '.overseer';
 export const STATE_FILE_NAME = 'state.json';
@@ -535,6 +536,7 @@ export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile 
     const raw = fs.readFileSync(agentsPath, 'utf-8');
     const parsed = JSON.parse(raw);
     const custom = parsed.customAgents || (parsed.agents ? parsed.agents : undefined);
+    const customPlaybooks = parsed.customPlaybooks || (parsed.playbooks ? parsed.playbooks : undefined);
     const disabled = Array.isArray(parsed.disabledAgents)
       ? parsed.disabledAgents
       : Array.isArray(parsed.disabled)
@@ -542,6 +544,7 @@ export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile 
       : [];
     return {
       customAgents: custom,
+      customPlaybooks,
       disabledAgents: disabled,
     };
   } catch {
@@ -552,7 +555,7 @@ export function loadAgentsConfig(cwd: string = process.cwd()): AgentsConfigFile 
 export function getAvailableAgents(data?: AppState, cwd?: string): string[] {
   const localConfig = loadAgentsConfig(cwd);
   const disabled = new Set(localConfig.disabledAgents || []);
-  const builtin = ['claude', 'agy', 'gemini', 'pi'].filter((a) => !disabled.has(a));
+  const builtin = Object.keys(BUILTIN_PRESETS).filter((a) => !disabled.has(a));
   const customFromState = data?.customAgents ? Object.keys(data.customAgents) : [];
   const customFromConfig = localConfig.customAgents ? Object.keys(localConfig.customAgents) : [];
   return Array.from(new Set([...builtin, ...customFromState, ...customFromConfig]));
@@ -569,20 +572,16 @@ export function getAgentDefinition(agentName: string, data?: AppState, cwd?: str
     return localConfig.customAgents[agentName];
   }
 
-  switch (norm) {
-    case 'claude':
-      return { command: 'claude --dangerously-skip-permissions -p "{prompt}"', description: 'Claude CLI autonomous assistant' };
-    case 'agy':
-    case 'gemini':
-      return { command: 'agy --sandbox --dangerously-skip-permissions -p "{prompt}"', description: 'Antigravity / Gemini CLI agent' };
-    case 'pi':
-      return { command: 'pi "{prompt}"', description: 'Pi CLI agent' };
-    default:
-      return {
-        command: `${agentName} "{prompt}"`,
-        description: `Custom agent ${agentName}`,
-      };
+  if (BUILTIN_PRESETS[norm]) {
+    return BUILTIN_PRESETS[norm];
   }
+
+  return {
+    bin: agentName,
+    args: ['{prompt}'],
+    command: `${agentName} "{prompt}"`,
+    description: `Custom agent ${agentName}`,
+  };
 }
 
 export function appStateToAppConfig(data: AppState, cwd?: string): AppConfig {

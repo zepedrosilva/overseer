@@ -106,6 +106,9 @@ export async function provisionWorktree(
   }
 
   // If push is disabled (e.g. read-only review playbook or sandboxed run), intercept git push
+  const hooksDir = path.join(worktreePath, '.git', 'hooks');
+  const prePushHook = path.join(hooksDir, 'pre-push');
+
   if (options?.allowPush === false) {
     try {
       await execFileAsync('git', ['remote', 'set-url', '--push', 'origin', 'OVERSEER_PUSH_DISABLED'], {
@@ -113,6 +116,21 @@ export async function provisionWorktree(
       });
     } catch {
       // Ignore if remote configuration fails in mock environments
+    }
+
+    try {
+      if (fs.existsSync(path.join(worktreePath, '.git'))) {
+        if (!fs.existsSync(hooksDir)) {
+          fs.mkdirSync(hooksDir, { recursive: true });
+        }
+        fs.writeFileSync(
+          prePushHook,
+          '#!/bin/sh\necho "Overseer: git push is disabled for read-only playbook" >&2\nexit 1\n',
+          { mode: 0o755 }
+        );
+      }
+    } catch {
+      // Ignore if hooks write fails
     }
   } else {
     // Restore push URL if previously disabled
@@ -123,6 +141,18 @@ export async function provisionWorktree(
     } catch {
       // Ignore
     }
+
+    try {
+      if (fs.existsSync(prePushHook)) {
+        fs.unlinkSync(prePushHook);
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  if (!fs.existsSync(path.join(worktreePath, '.git')) && !process.env.VITEST) {
+    throw new Error(`Worktree provisioning failed: ${worktreePath} is not a valid git repository`);
   }
 
   return worktreePath;
