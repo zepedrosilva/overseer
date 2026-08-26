@@ -149,7 +149,7 @@ export function getSpawnExecution(
 ): { bin: string; args: string[] } {
   const norm = agentName.toLowerCase();
   if (norm === 'claude') {
-    return { bin: 'claude', args: ['-p', promptText] };
+    return { bin: 'claude', args: ['--dangerously-skip-permissions', '-p', promptText] };
   }
   if (norm === 'agy' || norm === 'gemini') {
     return { bin: 'agy', args: ['--dangerously-skip-permissions', '-p', promptText] };

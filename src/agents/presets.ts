@@ -5,7 +5,7 @@ import type { AgentDefinition } from '../app/types.js';
 
 export const BUILTIN_PRESETS: Record<string, AgentDefinition> = {
   claude: {
-    command: 'claude -p "{prompt}"',
+    command: 'claude --dangerously-skip-permissions -p "{prompt}"',
     description: 'Claude CLI autonomous assistant',
   },
   gemini: {

@@ -571,7 +571,7 @@ export function getAgentDefinition(agentName: string, data?: AppState, cwd?: str
 
   switch (norm) {
     case 'claude':
-      return { command: 'claude -p "{prompt}"', description: 'Claude CLI autonomous assistant' };
+      return { command: 'claude --dangerously-skip-permissions -p "{prompt}"', description: 'Claude CLI autonomous assistant' };
     case 'agy':
     case 'gemini':
       return { command: 'agy --dangerously-skip-permissions -p "{prompt}"', description: 'Antigravity / Gemini CLI agent' };

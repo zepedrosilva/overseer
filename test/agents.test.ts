@@ -91,7 +91,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
     it('builds built-in claude preset command', () => {
       const pr = createMockPR();
       const { command, definition } = buildAgentCommand('claude', pr, DEFAULT_CONFIG, '/tmp/wt');
-      expect(command).toContain('claude -p');
+      expect(command).toContain('claude --dangerously-skip-permissions -p');
       expect(definition.description).toContain('Claude');
     });
 
