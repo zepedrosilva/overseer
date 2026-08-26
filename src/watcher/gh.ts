@@ -575,13 +575,26 @@ export async function fetchPrDiffSummary(
   try {
     const { stdout } = await execFileAsync('gh', [
       'pr',
-      'diff',
+      'view',
       String(number),
       '--repo',
       `${owner}/${repo}`,
-      '--stat',
+      '--json',
+      'files,additions,deletions',
     ]);
-    return stdout.trim();
+    const parsed = JSON.parse(stdout) as {
+      additions?: number;
+      deletions?: number;
+      files?: { path: string; additions: number; deletions: number; changeType: string }[];
+    };
+    const fileList = (parsed.files || [])
+      .slice(0, 15)
+      .map((f) => `  • ${f.path} (+${f.additions}, -${f.deletions})`)
+      .join('\n');
+    const remainingCount = (parsed.files?.length || 0) - 15;
+    const remainingStr = remainingCount > 0 ? `\n  • ... and ${remainingCount} more files` : '';
+
+    return `Total Volume: +${parsed.additions || 0} lines, -${parsed.deletions || 0} lines across ${parsed.files?.length || 0} files:\n${fileList}${remainingStr}`;
   } catch (err) {
     return `Unable to fetch diff summary: ${(err as Error).message}`;
   }

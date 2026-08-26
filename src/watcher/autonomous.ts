@@ -20,6 +20,7 @@ export const AUTONOMOUS_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 // In-memory retry & cooldown tracker (ephemeral per process session)
 const prRetryCounters = new Map<string, number>();
 const prLastDispatchAt = new Map<string, number>();
+const prReviewedKeys = new Set<string>();
 
 export function getPrRetryCount(keyStr: string): number {
   return prRetryCounters.get(keyStr) || 0;
@@ -32,6 +33,7 @@ export function resetPrRetryCount(keyStr: string): void {
 export function resetAutonomousState(): void {
   prRetryCounters.clear();
   prLastDispatchAt.clear();
+  prReviewedKeys.clear();
 }
 
 export async function evaluateAutonomousPolicies(
@@ -79,7 +81,7 @@ export async function evaluateAutonomousPolicies(
       continue; // Max retry loop breaker tripped
     }
 
-    const allowedTriggers = policy.triggers || ['CiFailing', 'ChangesRequested'];
+    const allowedTriggers = policy.triggers || ['CiFailing', 'ChangesRequested', 'Reviewing'];
 
     // ── 1. Check CI Failure Trigger ──────────────────────────────────────────
     if (
@@ -173,6 +175,63 @@ export async function evaluateAutonomousPolicies(
         trigger: 'autonomous_review',
         mode: mode === 'dry-run' ? 'dry-run' : 'live',
         comments,
+        cwd,
+      });
+
+      if (
+        Array.from(data.workers.values()).filter((w) => w.status === 'running').length >=
+        MAX_CONCURRENT_WORKERS
+      ) {
+        break;
+      }
+      continue;
+    }
+
+    // ── 3. Check Reviewing / Pre-flight Review Trigger ─────────────────────────
+    if (
+      pr.overallStatus === 'Reviewing' &&
+      allowedTriggers.includes('Reviewing')
+    ) {
+      const reviewRevisionKey = `${keyStr}@${pr.updatedAt || pr.branch}`;
+      if (prReviewedKeys.has(reviewRevisionKey)) {
+        continue; // Revision already reviewed
+      }
+
+      const allowedPbs = policy.allowedPlaybooks || ['preflight-review'];
+      const playbookName = allowedPbs.includes('preflight-review')
+        ? 'preflight-review'
+        : allowedPbs[0];
+
+      prRetryCounters.set(keyStr, retryCount + 1);
+      prLastDispatchAt.set(keyStr, Date.now());
+      prReviewedKeys.add(reviewRevisionKey);
+
+      appendLog(
+        data,
+        pr.key,
+        `[policy] Autonomous trigger fired: Reviewing on ${keyStr} (${playbookName})`
+      );
+
+      let diffSummary = `Changed files: ${pr.changedFiles || 0} (+${pr.additions || 0}, -${pr.deletions || 0})`;
+      try {
+        diffSummary = await fetchPrDiffSummary(
+          pr.key.owner,
+          pr.key.repo,
+          pr.key.number
+        );
+      } catch {
+        // Fallback
+      }
+
+      await dispatchAgent({
+        data,
+        pr,
+        config,
+        agentName: policy.agent,
+        playbookName,
+        trigger: 'autonomous_review',
+        mode: mode === 'dry-run' ? 'dry-run' : 'live',
+        diffSummary,
         cwd,
       });
 

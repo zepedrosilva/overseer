@@ -260,7 +260,7 @@ export type RepoPolicyMode = 'off' | 'dry-run' | 'live';
 export interface RepoPolicyConfig {
   mode?: RepoPolicyMode;
   agent?: string;
-  triggers?: ('CiFailing' | 'ChangesRequested')[];
+  triggers?: ('CiFailing' | 'ChangesRequested' | 'Reviewing')[];
   allowedPlaybooks?: string[];
 }
 

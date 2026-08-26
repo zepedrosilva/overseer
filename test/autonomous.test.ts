@@ -180,4 +180,47 @@ describe('Autonomous Policy Evaluator & Safety Circuit Breakers', () => {
 
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
+
+  it('triggers preflight-review when PR is in Reviewing state under dry-run mode', async () => {
+    const data = createEmptyState();
+    const pr = createPrFixture(4, 'Ready');
+    pr.overallStatus = 'Reviewing';
+    pr.ciStatus = 'SUCCESS';
+    pr.reviewVerdict = 'NO_REVIEW';
+    upsertPR(data, pr);
+
+    setRepoPolicy(data, 'acme-corp/web-frontend', {
+      mode: 'dry-run',
+      agent: 'claude',
+      triggers: ['Reviewing'],
+      allowedPlaybooks: ['preflight-review'],
+    });
+
+    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
+      sessionId: 'sess-3',
+      prKey: pr.key,
+      agentName: 'claude',
+      command: 'mock',
+      worktreePath: 'mock',
+      branch: pr.branch,
+      startedAt: Date.now(),
+      status: 'dry-run',
+    });
+
+    await evaluateAutonomousPolicies(data, mockConfig);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'claude',
+        playbookName: 'preflight-review',
+        trigger: 'autonomous_review',
+        mode: 'dry-run',
+      })
+    );
+
+    // Second evaluation on unchanged PR should skip redundant review
+    await evaluateAutonomousPolicies(data, mockConfig);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+  });
 });
