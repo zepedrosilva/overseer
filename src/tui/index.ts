@@ -8,7 +8,7 @@ import { calculateLayout, padEndVisual } from './layout.js';
 import { renderBanner, renderStatsBar, renderDivider } from './banner.js';
 import { renderSearchBar, renderScopeTabBar, filterPRs } from './search.js';
 import { renderTable } from './table.js';
-import { renderDetails, renderDetailsModal } from './details.js';
+import { renderDetailsModal } from './details.js';
 import { renderSettingsModal, SETTINGS_ITEMS, POLL_INTERVALS, RECENT_WINDOW_OPTIONS, TEAM_ACTIVE_WINDOW_OPTIONS, TEAM_POLL_INTERVALS } from './settings.js';
 import { renderDiffModal, parseAndColorizeDiff } from './diff.js';
 import { renderLogsModal, loadPRLogFile } from './logs.js';
@@ -17,11 +17,11 @@ import { loadAgentStats, calculateAgentStats } from '../agents/stats.js';
 import { renderBackfillModal } from './backfill.js';
 import { renderHelpModal } from './help.js';
 import { renderAgentModal, PLAYBOOK_OPTIONS } from './agentModal.js';
-import { calculateStats, backfillHistoricalStats, backfill30DayStats } from '../stats/index.js';
+import { calculateStats, backfillHistoricalStats } from '../stats/index.js';
 import { renderFooter, type FooterMode, type FooterContext } from './footer.js';
-import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getRepoRoleAgent, getAvailableAgents, saveState, saveSettings } from '../app/state.js';
+import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getRepoRoleAgent, getAvailableAgents, saveState, saveSettings, loadAgentsConfig } from '../app/state.js';
+import { getAvailablePlaybooks } from '../agents/playbooks.js';
 import { getPRDiff } from '../watcher/gh.js';
-import { colors, rgbColor } from './colors.js';
 import type { BackfillProgress, LeaderboardSort } from '../app/types.js';
 
 export type TUIActionCallback = (action: string, payload?: Record<string, unknown>) => void | Promise<void>;
@@ -75,13 +75,43 @@ export function createTUI(
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
   let selectedPlaybookIndex = 0;
-  const availablePlaybooks = [
-    'preflight-review',
-    'ci-repair',
-    'address-comments',
-    'rebase-resolver',
-    'custom...',
-  ];
+
+  function getPlaybooksList(): string[] {
+    const list = getAvailablePlaybooks(loadAgentsConfig());
+    if (!list.includes('custom...')) {
+      list.push('custom...');
+    }
+    return list;
+  }
+
+  function timeframeToDays(tf: StatsTimeframe): number {
+    switch (tf) {
+      case '7d': return 7;
+      case '14d': return 14;
+      case '30d': return 30;
+      case '60d': return 60;
+      case '90d': return 90;
+      default: return 30;
+    }
+  }
+
+  let cachedAgentStats: ReturnType<typeof calculateAgentStats> | null = null;
+  let cachedStats: ReturnType<typeof calculateStats> | null = null;
+
+  function refreshStatsCache(): void {
+    const days = timeframeToDays(statsTimeframe);
+    cachedStats = calculateStats(data, statsTimeframe, data.viewScope || 'mine', statsSortBy);
+    const agentStatsStore = loadAgentStats();
+    cachedAgentStats = calculateAgentStats(agentStatsStore.records, days, {
+      repoPolicies: Object.fromEntries(
+        data.repos.map((r) => [`${r.owner}/${r.repo}`.toLowerCase(), getRepoPolicy(data, r) || {}])
+      ),
+      repoAgents: Object.fromEntries(
+        data.repos.map((r) => [`${r.owner}/${r.repo}`.toLowerCase(), getRepoAgent(data, r)])
+      ),
+      settings: { defaultAgent: data.settings.defaultAgent },
+    });
+  }
 
   // Live animation ticker (100ms) for spinners during polling, active CI workflows, and worker runs
   const animationTimer = setInterval(() => {
@@ -362,7 +392,7 @@ export function createTUI(
         selectedAgent: currentChosenAgent,
         availableAgents,
         selectedPlaybookIndex,
-        availablePlaybooks,
+        availablePlaybooks: getPlaybooksList(),
         repoMode: selectedPR ? getRepoMode(data, selectedPR.key) : undefined,
         message: statusMessage,
       };
@@ -498,9 +528,11 @@ export function createTUI(
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
         const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
-        const stats = calculateStats(data, statsTimeframe, data.viewScope || 'mine', statsSortBy);
-        const agentStatsStore = loadAgentStats();
-        const agentStats = calculateAgentStats(agentStatsStore.records, 30);
+        if (!cachedStats || !cachedAgentStats) {
+          refreshStatsCache();
+        }
+        const stats = cachedStats!;
+        const agentStats = cachedAgentStats!;
         const modalLines = renderStatsModal({
           stats,
           agentStats,
@@ -910,6 +942,7 @@ export function createTUI(
 
         if (key === 'a' || key === 'A') { // Switch to Agent Telemetry tab
           statsActiveTab = statsActiveTab === 'agents' ? 'pr' : 'agents';
+          refreshStatsCache();
           render();
           return;
         }
@@ -917,6 +950,7 @@ export function createTUI(
         if (key === 'p' || key === 'P') { // Switch back to PR tab or close
           if (statsActiveTab === 'agents') {
             statsActiveTab = 'pr';
+            refreshStatsCache();
             render();
           } else {
             isStatsModalOpen = false;
@@ -927,30 +961,35 @@ export function createTUI(
 
         if (key === '1') {
           statsTimeframe = '7d';
+          refreshStatsCache();
           render();
           return;
         }
 
         if (key === '2') {
           statsTimeframe = '14d';
+          refreshStatsCache();
           render();
           return;
         }
 
         if (key === '3') {
           statsTimeframe = '30d';
+          refreshStatsCache();
           render();
           return;
         }
 
         if (key === '4') {
           statsTimeframe = '60d';
+          refreshStatsCache();
           render();
           return;
         }
 
         if (key === '5') {
           statsTimeframe = '90d';
+          refreshStatsCache();
           render();
           return;
         }
@@ -959,6 +998,7 @@ export function createTUI(
           const tfList: StatsTimeframe[] = ['7d', '14d', '30d', '60d', '90d'];
           const idx = tfList.indexOf(statsTimeframe);
           statsTimeframe = tfList[(idx + 1) % tfList.length];
+          refreshStatsCache();
           render();
           return;
         }
@@ -977,6 +1017,7 @@ export function createTUI(
           const sortCriteria: LeaderboardSort[] = ['merged7', 'merged14', 'merged30', 'merged60', 'merged90', 'total', 'response', 'reviews', 'comments', 'stale'];
           const idx = sortCriteria.indexOf(statsSortBy);
           statsSortBy = sortCriteria[(idx + 1) % sortCriteria.length];
+          refreshStatsCache();
           render();
           return;
         }
@@ -985,6 +1026,7 @@ export function createTUI(
           data.viewScope = data.viewScope === 'team' ? 'mine' : 'team';
           selectedRow = 0;
           saveState(data);
+          refreshStatsCache();
           render();
           return;
         }
@@ -1307,14 +1349,23 @@ export function createTUI(
 
         if (key === 'm' || key === 'M') { // Toggle repo mode: OFF -> DRY-RUN -> LIVE
           if (pr) {
-            const modes: ('off' | 'dry-run' | 'live')[] = ['off', 'dry-run', 'live'];
             const currentMode = getRepoMode(data, pr.key);
-            const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
-            const existingPolicy = getRepoPolicy(data, pr.key) || {};
-            setRepoPolicy(data, pr.key, { ...existingPolicy, mode: nextMode });
-            saveSettings(data);
-            saveState(data);
-            render();
+            if (currentMode === 'off') {
+              const existingPolicy = getRepoPolicy(data, pr.key) || {};
+              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'dry-run' });
+              saveSettings(data);
+              saveState(data);
+              render();
+            } else if (currentMode === 'dry-run') {
+              footerMode = 'CONFIRM_LIVE_MODE';
+              render();
+            } else {
+              const existingPolicy = getRepoPolicy(data, pr.key) || {};
+              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'off' });
+              saveSettings(data);
+              saveState(data);
+              render();
+            }
           }
           return;
         }
@@ -1424,14 +1475,23 @@ export function createTUI(
 
         if (key === 'm' || key === 'M') { // Toggle repo mode: OFF -> DRY-RUN -> LIVE
           if (pr) {
-            const modes: ('off' | 'dry-run' | 'live')[] = ['off', 'dry-run', 'live'];
             const currentMode = getRepoMode(data, pr.key);
-            const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
-            const existingPolicy = getRepoPolicy(data, pr.key) || {};
-            setRepoPolicy(data, pr.key, { ...existingPolicy, mode: nextMode });
-            saveSettings(data);
-            saveState(data);
-            render();
+            if (currentMode === 'off') {
+              const existingPolicy = getRepoPolicy(data, pr.key) || {};
+              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'dry-run' });
+              saveSettings(data);
+              saveState(data);
+              render();
+            } else if (currentMode === 'dry-run') {
+              footerMode = 'CONFIRM_LIVE_MODE';
+              render();
+            } else {
+              const existingPolicy = getRepoPolicy(data, pr.key) || {};
+              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'off' });
+              saveSettings(data);
+              saveState(data);
+              render();
+            }
           }
           return;
         }
@@ -1476,6 +1536,7 @@ export function createTUI(
       // Handle Playbook Preset Selection Mode (PLAYBOOK_SELECT)
       if (footerMode === 'PLAYBOOK_SELECT') {
         const pr = getSelectedPR();
+        const playbooksList = getPlaybooksList();
 
         if (key === '\x1b') { // Esc goes back to agent picker
           footerMode = 'AGENT_SELECT';
@@ -1485,26 +1546,26 @@ export function createTUI(
 
         // Direct number key selection
         const num = parseInt(key, 10);
-        if (!isNaN(num) && num >= 1 && num <= availablePlaybooks.length) {
+        if (!isNaN(num) && num >= 1 && num <= playbooksList.length) {
           selectedPlaybookIndex = num - 1;
           render();
           return;
         }
 
         if (key === '\x1b[D' || key === 'h') { // Left
-          selectedPlaybookIndex = (selectedPlaybookIndex - 1 + availablePlaybooks.length) % availablePlaybooks.length;
+          selectedPlaybookIndex = (selectedPlaybookIndex - 1 + playbooksList.length) % playbooksList.length;
           render();
           return;
         }
 
         if (key === '\x1b[C' || key === 'l' || key === '\t') { // Right or Tab
-          selectedPlaybookIndex = (selectedPlaybookIndex + 1) % availablePlaybooks.length;
+          selectedPlaybookIndex = (selectedPlaybookIndex + 1) % playbooksList.length;
           render();
           return;
         }
 
         if (key === '\x0d') { // Enter dispatches selected playbook or opens custom prompt
-          const chosenPlaybook = availablePlaybooks[selectedPlaybookIndex];
+          const chosenPlaybook = playbooksList[selectedPlaybookIndex];
           const chosenAgent = availableAgents[selectedAgentIndex] || 'claude';
 
           if (chosenPlaybook === 'custom...') {
@@ -1591,8 +1652,8 @@ export function createTUI(
         return;
       }
 
-      // Handle Confirmation Modals (CONFIRM_MERGE, CONFIRM_CLOSE)
-      if (footerMode === 'CONFIRM_MERGE' || footerMode === 'CONFIRM_CLOSE') {
+      // Handle Confirmation Modals (CONFIRM_MERGE, CONFIRM_CLOSE, CONFIRM_LIVE_MODE)
+      if (footerMode === 'CONFIRM_MERGE' || footerMode === 'CONFIRM_CLOSE' || footerMode === 'CONFIRM_LIVE_MODE') {
         const currentMode = footerMode;
         if (key === 'y' || key === 'Y') {
           footerMode = 'NORMAL';
@@ -1600,6 +1661,15 @@ export function createTUI(
             onAction('merge', { pr: getSelectedPR() });
           } else if (currentMode === 'CONFIRM_CLOSE') {
             onAction('close', { pr: getSelectedPR() });
+          } else if (currentMode === 'CONFIRM_LIVE_MODE') {
+            const pr = getSelectedPR();
+            if (pr) {
+              const existingPolicy = getRepoPolicy(data, pr.key) || {};
+              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'live' });
+              saveSettings(data);
+              saveState(data);
+              statusMessage = `Enabled LIVE autonomous mode for ${pr.key.owner}/${pr.key.repo}`;
+            }
           }
           render();
           return;
@@ -1785,6 +1855,20 @@ export function createTUI(
           render();
         }
         return;
+      }
+
+      if (key === 'C' || key === 'X' || key === 'K') { // Cancel running worker process for selected PR
+        const pr = getSelectedPR();
+        if (pr) {
+          const keyStr = prKeyToString(pr.key);
+          const worker = data.workers.get(keyStr);
+          if (worker && worker.status === 'running') {
+            onAction('cancel-agent', { pr });
+            statusMessage = `Cancelling agent worker for #${pr.key.number}...`;
+            render();
+            return;
+          }
+        }
       }
 
       if (key === 'd') { // Diff

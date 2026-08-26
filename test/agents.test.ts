@@ -297,5 +297,116 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(res).toBe(wtPath);
       expect(fs.existsSync(wtPath)).toBe(true);
     });
+
+    it('safely handles prompts containing special shell and regex characters ($&, $\', $1, `, ", $(...)) without shell expansion', async () => {
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      // Verify interpolateAgentCommand with regex replacement characters
+      const dangerousTemplate = 'agent --prompt "{prompt}"';
+      const dangerousPrompt = 'Review $& and $\' and $1 and $$ and `whoami` and $(rm -rf /) and "quotes"';
+      const interpolated = interpolateAgentCommand(dangerousTemplate, {
+        pr: pr.key.number,
+        branch: pr.branch,
+        owner: pr.key.owner,
+        repo: pr.key.repo,
+        url: pr.url,
+        prompt: dangerousPrompt,
+      });
+
+      expect(interpolated).toBe(`agent --prompt "${dangerousPrompt}"`);
+      expect(interpolated).toContain('$&');
+      expect(interpolated).toContain('$\'');
+      expect(interpolated).toContain('$1');
+      expect(interpolated).toContain('$$');
+    });
+
+    it('cancels active worker and records exactly one telemetry record with cancelled status', async () => {
+      const { loadAgentStats } = await import('../src/agents/stats.js');
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        agents: {
+          sleeper: {
+            command: 'node -e "setInterval(() => {}, 1000)"',
+            description: 'Long running agent',
+          },
+        },
+      };
+
+      const worker = await dispatchAgent({
+        data: state,
+        pr,
+        config,
+        agentName: 'sleeper',
+        cwd: tmpDir,
+      });
+
+      expect(worker.status).toBe('running');
+      const cancelled = cancelWorker(state, pr.key, tmpDir);
+      expect(cancelled).toBe(true);
+      expect(worker.status).toBe('cancelled');
+
+      // Wait for process close event to settle
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // Worker should stay cancelled, NOT flip to failed
+      expect(worker.status).toBe('cancelled');
+
+      // Check telemetry stats file
+      const stats = loadAgentStats(undefined, tmpDir);
+      const recordsForSession = stats.records.filter((r) => r.sessionId === worker.sessionId);
+      expect(recordsForSession.length).toBe(1);
+      expect(recordsForSession[0].status).toBe('cancelled');
+    }, 15000);
+
+    it('replaces stale running worker when previous process is dead and allows new dispatch', async () => {
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      // Inject a stale worker handle with a dead PID (e.g. 999999)
+      const staleWorker = {
+        sessionId: 'stale-sess',
+        prKey: pr.key,
+        agentName: 'claude',
+        command: 'mock',
+        worktreePath: 'mock',
+        branch: pr.branch,
+        startedAt: Date.now() - 60000,
+        status: 'running' as const,
+        pid: 99999999,
+      };
+      state.workers.set(`${pr.key.owner}/${pr.key.repo}#${pr.key.number}`, staleWorker);
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        agents: {
+          echo: {
+            command: 'node -e "process.stdout.write(\'ok\\n\')"',
+            description: 'Echo agent',
+          },
+        },
+      };
+
+      const newWorker = await dispatchAgent({
+        data: state,
+        pr,
+        config,
+        agentName: 'echo',
+        cwd: tmpDir,
+      });
+
+      expect(newWorker).not.toBeNull();
+      expect(newWorker.sessionId).not.toBe('stale-sess');
+      expect(newWorker.agentName).toBe('echo');
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(newWorker.status).toBe('completed');
+    }, 15000);
   });
 });

@@ -7,8 +7,6 @@ import { prKeyToString } from './app/types.js';
 import {
   loadState,
   saveState,
-  loadSettings,
-  saveSettings,
   resetState,
   resetSettings,
   resetAll,
@@ -28,12 +26,11 @@ import {
   mergePR,
   closePR,
   addComment,
-  viewPRDiffInteractive,
 } from './watcher/gh.js';
 import { pollAllRepos } from './watcher/index.js';
-import { dispatchAgent } from './agents/index.js';
+import { dispatchAgent, cancelWorker } from './agents/index.js';
 import { resetAgentStats } from './agents/stats.js';
-import { resolveWorktreeDir, cleanupWorktree, cleanupPRArtifacts } from './agents/worktree.js';
+import { cleanupPRArtifacts } from './agents/worktree.js';
 
 interface CliArgs {
   api?: boolean;
@@ -304,10 +301,25 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (action === 'cancel-agent') {
+      if (pr) {
+        const cancelled = cancelWorker(data, pr.key);
+        if (cancelled) {
+          tui?.showMessage(`Cancelled agent worker for ${keyStr}`);
+          apiServer?.broadcast('workerUpdated', { key: keyStr, status: 'cancelled' });
+        } else {
+          tui?.showMessage(`No active agent running for ${keyStr}`);
+        }
+        tui?.render();
+      }
+      return;
+    }
+
     if (action === 'agent') {
       const prompt = typeof payload?.prompt === 'string' && payload.prompt.length > 0 ? payload.prompt : undefined;
       const agentName = (payload?.agentName as string) || (pr ? getRepoAgent(data, pr.key) : data.settings.defaultAgent);
       const playbookName = (payload?.playbookName as string) || (prompt ? 'custom' : undefined);
+      const trigger = (payload?.trigger as 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api' | undefined) || (payload?.source === 'api' ? 'api' : 'manual');
 
       tui?.showMessage(`Dispatching agent '${agentName}' for ${keyStr}...`);
       dispatchAgent({
@@ -317,7 +329,7 @@ async function main(): Promise<void> {
         agentName,
         playbookName,
         prompt,
-        trigger: 'manual',
+        trigger,
       })
         .then(() => {
           tui?.render();

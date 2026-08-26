@@ -307,4 +307,66 @@ describe('Autonomous Policy Evaluator & Safety Circuit Breakers', () => {
     await evaluateAutonomousPolicies(data, mockConfig);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('enforces global dry-run precedence over repo live policy', async () => {
+    const data = createEmptyState();
+    data.dryRun = true; // Global flag enabled
+    const pr = createPrFixture(1, 'CiFailing');
+    upsertPR(data, pr);
+
+    setRepoPolicy(data, 'acme-corp/web-frontend', {
+      mode: 'live', // Repo wants live execution
+      agent: 'agy',
+      triggers: ['CiFailing'],
+      allowedPlaybooks: ['ci-repair'],
+    });
+
+    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
+      sessionId: 'sess-dry',
+      prKey: pr.key,
+      agentName: 'agy',
+      command: 'mock',
+      worktreePath: 'mock',
+      branch: pr.branch,
+      startedAt: Date.now(),
+      status: 'running',
+    });
+
+    await evaluateAutonomousPolicies(data, mockConfig);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'dry-run',
+      })
+    );
+  });
+
+  it('skips dispatch when allowedPlaybooks is empty', async () => {
+    const data = createEmptyState();
+    const pr = createPrFixture(1, 'CiFailing');
+    upsertPR(data, pr);
+
+    setRepoPolicy(data, 'acme-corp/web-frontend', {
+      mode: 'live',
+      agent: 'agy',
+      triggers: ['CiFailing'],
+      allowedPlaybooks: [], // Empty list
+    });
+
+    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
+      sessionId: 'sess-empty',
+      prKey: pr.key,
+      agentName: 'agy',
+      command: 'mock',
+      worktreePath: 'mock',
+      branch: pr.branch,
+      startedAt: Date.now(),
+      status: 'running',
+    });
+
+    await evaluateAutonomousPolicies(data, mockConfig);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
 });

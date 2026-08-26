@@ -11,6 +11,7 @@ export type FooterMode =
   | 'SEARCH'
   | 'CONFIRM_MERGE'
   | 'CONFIRM_CLOSE'
+  | 'CONFIRM_LIVE_MODE'
   | 'COMMENT_INPUT'
   | 'AGENT_SELECT'
   | 'PLAYBOOK_SELECT'
@@ -56,6 +57,12 @@ export function renderFooter(context: FooterContext, width: number): string {
   if (mode === 'CONFIRM_CLOSE') {
     const key = selectedPR ? prKeyToString(selectedPR.key) : '';
     const text = `  \x1B[${rgbColor(colors.red)}! Close Pull Request ${key}? (y/n):\x1B[0m `;
+    return padEndVisual(text, safeWidth);
+  }
+
+  if (mode === 'CONFIRM_LIVE_MODE') {
+    const repo = selectedPR ? `${selectedPR.key.owner}/${selectedPR.key.repo}` : 'this repository';
+    const text = `  \x1B[${rgbColor(colors.red)}⚠️  Enable LIVE autonomous actions for ${repo}? Agents will commit/comment automatically! (y/n):\x1B[0m `;
     return padEndVisual(text, safeWidth);
   }
 

@@ -571,5 +571,7 @@ export type ApiActionHandler = (
     text?: string;
     agentName?: string;
     playbookName?: string;
+    trigger?: 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api';
+    source?: 'tui' | 'api';
   }
 ) => void | Promise<void>;

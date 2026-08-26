@@ -196,7 +196,6 @@ export function renderTable(options: RenderTableOptions): string[] {
     else if (revBadge.kind === 'pending') revColorHex = colors.yellow;
 
     const revText = padEndVisual(truncateVisual(revBadge.text, revColWidth), revColWidth);
-    const repoName = truncateVisual(pr.key.repo, repoColWidth).padEnd(repoColWidth);
     const prNum = `#${pr.key.number}`.padEnd(6);
     const profile = options.teamProfiles?.[pr.author.toLowerCase()];
     const rawAuthor = profile?.name || pr.author;

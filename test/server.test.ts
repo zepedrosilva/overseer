@@ -254,4 +254,103 @@ describe('Local REST & SSE API Server', () => {
     expect(receivedChunks.join('')).toContain('event: testEvent');
     expect(receivedChunks.join('')).toContain('{"hello":"world"}');
   });
+
+  it('enforces token authentication on POST /actions when token is configured', async () => {
+    serverController = startApiServer(state, { port: 0, token: 'super-secret-token' });
+    if (!serverController.server.listening) {
+      await new Promise<void>((resolve) => serverController.server.once('listening', () => resolve()));
+    }
+    const port = (serverController.server.address() as any).port;
+
+    // 1. Unauthenticated request -> 401
+    const unauthRes = await makeRequest('POST', '/actions/recheck', port, { id: 'acme-corp/web-frontend#142' });
+    expect(unauthRes.status).toBe(401);
+    expect(unauthRes.parsed.error).toContain('Unauthorized');
+
+    // 2. Request with Authorization: Bearer -> 200
+    const authRes = await new Promise<{ status: number; parsed?: any }>((resolve) => {
+      const payload = JSON.stringify({ id: 'acme-corp/web-frontend#142' });
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: '/actions/recheck',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+            Authorization: 'Bearer super-secret-token',
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (c) => (data += c.toString()));
+          res.on('end', () => resolve({ status: res.statusCode || 0, parsed: JSON.parse(data) }));
+        }
+      );
+      req.write(payload);
+      req.end();
+    });
+    expect(authRes.status).toBe(200);
+    expect(authRes.parsed.ok).toBe(true);
+
+    // 3. Request with X-Overseer-Token header -> 200
+    const xTokenRes = await new Promise<{ status: number; parsed?: any }>((resolve) => {
+      const payload = JSON.stringify({ id: 'acme-corp/web-frontend#142' });
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: '/actions/recheck',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+            'X-Overseer-Token': 'super-secret-token',
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (c) => (data += c.toString()));
+          res.on('end', () => resolve({ status: res.statusCode || 0, parsed: JSON.parse(data) }));
+        }
+      );
+      req.write(payload);
+      req.end();
+    });
+    expect(xTokenRes.status).toBe(200);
+    expect(xTokenRes.parsed.ok).toBe(true);
+  });
+
+  it('rejects POST request bodies exceeding MAX_BODY_BYTES (64KB) with 413 Payload Too Large', async () => {
+    await setupServer();
+
+    // Create a payload larger than 64KB (e.g. 70KB)
+    const largePayload = JSON.stringify({ bigData: 'x'.repeat(70 * 1024) });
+
+    const res = await new Promise<{ status: number; parsed?: any }>((resolve) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: serverPort,
+          path: '/actions/comment',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(largePayload),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (c) => (data += c.toString()));
+          res.on('end', () => resolve({ status: res.statusCode || 0, parsed: data ? JSON.parse(data) : undefined }));
+        }
+      );
+      req.write(largePayload);
+      req.end();
+    });
+
+    expect(res.status).toBe(413);
+    expect(res.parsed.error).toContain('Payload too large');
+  });
 });

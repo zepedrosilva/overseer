@@ -265,7 +265,6 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     options.mode === 'dry-run' ||
     (options.mode === undefined && repoMode === 'dry-run')
   );
-  const effectiveMode = isDryRun ? 'dry-run' : 'live';
 
   // 1. Resolve Playbook & Injected Context
   const agentsConfig = loadAgentsConfig(cwd);

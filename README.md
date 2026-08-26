@@ -267,9 +267,9 @@ You can define local CLI agents or remote bot triggers in `./.overseer/agents.js
 
 ### 5. Multi-Layered Safety & Git Push Guards
 
-Overseer enforces strict physical guards to ensure agents can never clobber branches or push unintended commits:
+Overseer enforces multi-layered push prevention to ensure agents can never clobber branches or push unintended commits:
 * 🛡️ **Zero-Process Simulation in Dry-Run**: When a repo is in `dry-run`, prompts and commands are formatted and logged, but no child processes or git worktrees are spawned (0 API tokens consumed).
-* 🔒 **Git Remote Push Guard**: For read-only playbooks (such as `preflight-review`), Overseer automatically sets `git remote set-url --push origin OVERSEER_PUSH_DISABLED` inside the isolated worktree so any attempted push is physically rejected by Git.
+* 🔒 **Git Push Guards**: For read-only playbooks (such as `preflight-review`), Overseer automatically sets `git remote set-url --push origin OVERSEER_PUSH_DISABLED` and installs pre-push rejection hooks inside the isolated worktree to prevent accidental pushes.
 * 🌿 **Isolated Git Worktrees**: Agents operate exclusively inside ephemeral `./.overseer/worktrees/` folders without touching your main working directory.
 * 🧹 **Automatic Worktree Pruning**: On PR merge or close, all associated temporary worktrees and execution logs are deleted automatically.
 

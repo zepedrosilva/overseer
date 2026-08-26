@@ -99,13 +99,18 @@ export async function evaluateAutonomousPolicies(
       continue;
     }
 
+    // Reset retry counters if PR reached a healthy / ready state
+    if (pr.overallStatus === 'Ready' || pr.reviewVerdict === 'APPROVED') {
+      resetPrRetryCount(keyStr);
+    }
+
     // Only consider PRs belonging to user or in user scope (prevent running on teammate branches in team scope)
     const isUserPR =
       pr.scope === 'mine' ||
       pr.scope === 'both' ||
-      pr.scope === undefined ||
       (Boolean(data.currentUser && data.currentUser !== 'unknown') &&
-        pr.author.toLowerCase() === data.currentUser?.toLowerCase());
+        pr.author.toLowerCase() === data.currentUser?.toLowerCase()) ||
+      (pr.scope === undefined && (!data.currentUser || data.currentUser === 'unknown'));
 
     if (!isUserPR) {
       continue;
