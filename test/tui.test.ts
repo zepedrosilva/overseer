@@ -699,7 +699,7 @@ describe('TUI Components & Engine', () => {
       });
 
       const plainTable = tableLines.map(stripAnsi).join('\n');
-      expect(plainTable).toContain('[1]agy');
+      expect(plainTable).toContain('[1]');
     });
 
     it('renders docked live worker bar with indexed cards, prompt snippet, timer, and touched files', () => {

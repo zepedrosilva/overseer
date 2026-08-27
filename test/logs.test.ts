@@ -141,7 +141,7 @@ describe('Agent Logs Modal & Table Worker Indicators', () => {
 
       expect(stripAnsi(lines[1])).toContain('acme-corp');
       const rowText = stripAnsi(lines[2]);
-      expect(rowText).toContain('[1]cla');
+      expect(rowText).toContain('[1]');
       expect(rowText).toContain('web-frontend');
       expect(rowText).toContain('#142');
     });

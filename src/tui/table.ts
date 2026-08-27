@@ -186,11 +186,10 @@ export function renderTable(options: RenderTableOptions): string[] {
           w.prKey.repo === pr.key.repo &&
           w.prKey.number === pr.key.number
       );
-      const workerIdxStr = activeIdx >= 0 ? `[${activeIdx + 1}]` : '';
+      const workerIdxStr = activeIdx >= 0 ? `[${activeIdx + 1}]` : `[1]`;
       sIcon = getSpinnerChar(options.spinnerTick);
-      const agentShort = worker!.agentName.slice(0, 3);
-      sName = workerIdxStr ? `${workerIdxStr}${agentShort}`.slice(0, 6).padEnd(6) : worker!.agentName.slice(0, 6).padEnd(6);
-      sc = rgbColor(colors.yellow);
+      sName = workerIdxStr.padEnd(6);
+      sc = rgbColor(colors.cyan);
     } else if (isDryRunWorker) {
       sIcon = '🟡';
       sName = 'DRY'.padEnd(6);
