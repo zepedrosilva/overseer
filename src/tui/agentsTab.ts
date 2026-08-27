@@ -7,8 +7,8 @@ import path from 'node:path';
 import type { AppState, WorkerHandle, PrKey, AgentExecutionRecord } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { loadAgentStats } from '../agents/stats.js';
-import { colors, rgbColor, rgbBg, getSpinnerChar } from './colors.js';
-import { padEndVisual, truncateVisual, visualLength } from './layout.js';
+import { colors, rgbColor, getSpinnerChar } from './colors.js';
+import { padEndVisual, truncateVisual } from './layout.js';
 
 export interface RenderAgentsTabOptions {
   data: AppState;
@@ -34,29 +34,69 @@ export interface PRWorkflowGroup {
   lastActivityAt: number;
 }
 
+function workerToRecord(w: WorkerHandle): AgentExecutionRecord {
+  const startedIso = w.startedAt ? new Date(w.startedAt).toISOString() : new Date().toISOString();
+  const finishedIso = w.finishedAt ? new Date(w.finishedAt).toISOString() : new Date().toISOString();
+  const durationMs = w.finishedAt && w.startedAt ? Math.max(0, w.finishedAt - w.startedAt) : 0;
+  return {
+    sessionId: w.sessionId || `worker-${w.startedAt || Date.now()}`,
+    prKey: w.prKey,
+    agentName: w.agentName,
+    playbookName: w.playbookName || 'task',
+    driver: w.driver || 'local',
+    mode: w.mode || 'live',
+    trigger: 'manual',
+    startedAt: startedIso,
+    finishedAt: finishedIso,
+    durationMs,
+    status: w.status,
+    exitCode: w.status === 'completed' || w.status === 'dry-run' ? 0 : 1,
+    error: w.error,
+    summary:
+      w.error ||
+      (w.status === 'completed'
+        ? 'Refactored code and verified unit tests'
+        : w.status === 'interrupted'
+        ? 'Worker process interrupted'
+        : w.status === 'cancelled'
+        ? 'Worker execution cancelled'
+        : w.status === 'dry-run'
+        ? 'Dry-run simulation completed'
+        : `Worker ${w.status}`),
+    touchedFiles: w.touchedFiles,
+  };
+}
+
 export function collectPRWorkflowGroups(data: AppState, cwd?: string): PRWorkflowGroup[] {
   const groupsMap = new Map<string, PRWorkflowGroup>();
 
-  // 1. Collect from active workers
+  // 1. Collect from active and non-running workers in memory
   if (data.workers) {
     for (const [keyStr, worker] of data.workers.entries()) {
+      const isRunning = worker.status === 'running';
       if (!groupsMap.has(keyStr)) {
         const pr = data.prs?.get(keyStr);
-        groupsMap.set(keyStr, {
+        const group: PRWorkflowGroup = {
           prKey: worker.prKey,
           keyStr,
           repo: `${worker.prKey.owner}/${worker.prKey.repo}`,
           number: worker.prKey.number,
           branch: worker.branch || pr?.branch || 'main',
-          activeWorker: worker.status === 'running' ? worker : null,
-          records: [],
+          activeWorker: isRunning ? worker : null,
+          records: isRunning ? [] : [workerToRecord(worker)],
           lastActivityAt: worker.startedAt || Date.now(),
-        });
+        };
+        groupsMap.set(keyStr, group);
       } else {
         const group = groupsMap.get(keyStr)!;
-        if (worker.status === 'running') {
+        if (isRunning) {
           group.activeWorker = worker;
           group.lastActivityAt = Math.max(group.lastActivityAt, worker.startedAt || Date.now());
+        } else {
+          if (!group.records.some((r) => r.sessionId === worker.sessionId)) {
+            group.records.push(workerToRecord(worker));
+            group.lastActivityAt = Math.max(group.lastActivityAt, worker.startedAt || Date.now());
+          }
         }
       }
     }
@@ -86,7 +126,12 @@ export function collectPRWorkflowGroups(data: AppState, cwd?: string): PRWorkflo
         });
       } else {
         const group = groupsMap.get(keyStr)!;
-        group.records.push(rec);
+        const existingIdx = group.records.findIndex((r) => r.sessionId === rec.sessionId);
+        if (existingIdx >= 0) {
+          group.records[existingIdx] = rec;
+        } else {
+          group.records.push(rec);
+        }
         group.lastActivityAt = Math.max(group.lastActivityAt, startedMs);
       }
     }
@@ -183,7 +228,7 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
       : repoMode === 'live'
       ? `\x1B[1;32m●\x1B[0m`
       : repoMode === 'dry-run'
-      ? `\x1B[1;33m🟡\x1B[0m`
+      ? `\x1B[1;33m●\x1B[0m`
       : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
 
     const branchGlyph = isLastPr ? '└── ' : '├── ';
@@ -261,11 +306,29 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
         worktreePath: w.worktreePath,
         touchedFiles: w.touchedFiles,
       });
+    } else {
+      const durSecs = (w.finishedAt && w.startedAt) ? Math.round((w.finishedAt - w.startedAt) / 1000) : 0;
+      sessions.push({
+        id: w.sessionId || 'active-worker',
+        agentName: w.agentName,
+        playbookName: w.playbookName || 'task',
+        isRunning: false,
+        durationStr: `${durSecs}s`,
+        exitCode: w.status === 'completed' || w.status === 'dry-run' ? 0 : 1,
+        summary: w.error || (w.status === 'completed' ? 'Refactored code and verified unit tests' : w.status === 'interrupted' ? 'Worker process interrupted' : `Worker ${w.status}`),
+        startedAtStr: w.startedAt ? new Date(w.startedAt).toLocaleTimeString() : '',
+        logPath: w.logPath || path.join(cwd || process.cwd(), '.overseer', 'logs', `${activeGroup.prKey.owner}-${activeGroup.prKey.repo}-${activeGroup.prKey.number}.log`),
+        worktreePath: w.worktreePath,
+        touchedFiles: w.touchedFiles,
+      });
     }
   }
 
   // Historical records
   for (const r of activeGroup.records) {
+    if (sessions.some((s) => s.id === r.sessionId)) {
+      continue;
+    }
     const durSecs = r.durationMs ? Math.round(r.durationMs / 1000) : 0;
     sessions.push({
       id: r.sessionId,
@@ -273,8 +336,8 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
       playbookName: r.playbookName,
       isRunning: false,
       durationStr: `${durSecs}s`,
-      exitCode: r.exitCode ?? (r.status === 'completed' ? 0 : 1),
-      summary: r.summary || (r.status === 'completed' ? 'Refactored code and verified unit tests' : r.error || 'Execution stopped'),
+      exitCode: r.exitCode ?? (r.status === 'completed' || r.status === 'dry-run' ? 0 : 1),
+      summary: r.summary || (r.status === 'completed' ? 'Refactored code and verified unit tests' : r.error || (r.status === 'interrupted' ? 'Worker process interrupted' : 'Execution stopped')),
       startedAtStr: r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : '',
       logPath: path.join(cwd || process.cwd(), '.overseer', 'logs', `${activeGroup.prKey.owner}-${activeGroup.prKey.repo}-${activeGroup.prKey.number}.log`),
       touchedFiles: r.touchedFiles,

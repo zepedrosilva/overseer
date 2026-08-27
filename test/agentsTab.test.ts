@@ -324,4 +324,96 @@ describe('Agents Tab & Session Stream Engine', () => {
     expect(disabledPlain).not.toContain('🟡 api-gateway');
     expect(disabledPlain).not.toContain('○ web-frontend');
   });
+
+  it('renders non-running workers (interrupted, completed) as session cards', () => {
+    const data = createEmptyState();
+    upsertPR(data, createMockPR(30));
+
+    const interruptedWorker: WorkerHandle = {
+      sessionId: 'sess-30-interrupted',
+      prKey: { owner: 'acme-corp', repo: 'backend-service', number: 30 },
+      agentName: 'claude',
+      playbookName: 'preflight-review',
+      command: 'claude run',
+      worktreePath: path.join(tmpDir, 'wt-30'),
+      branch: 'feat/db-refactor-30',
+      startedAt: Date.now() - 60000,
+      finishedAt: Date.now() - 10000,
+      status: 'interrupted',
+      error: 'Worker interrupted by user',
+    };
+    data.workers.set('acme-corp/backend-service#30', interruptedWorker);
+
+    const groups = collectPRWorkflowGroups(data, tmpDir);
+    expect(groups.length).toBe(1);
+    expect(groups[0].activeWorker).toBeNull();
+    expect(groups[0].records.length).toBe(1);
+    expect(groups[0].records[0].status).toBe('interrupted');
+
+    const lines = renderAgentsTab({
+      data,
+      width: 120,
+      height: 20,
+      selectedPrIndex: 0,
+      selectedSessionIndex: 0,
+      focusedPane: 'left',
+      expandedSessionIds: new Set(),
+      scrollOffset: 0,
+      cwd: tmpDir,
+    });
+
+    const plain = lines.map(stripAnsi).join('\n');
+    expect(plain).toContain('1 session');
+    expect(plain).not.toContain('0 sessions');
+    expect(plain).not.toContain('(No agent execution sessions recorded for this PR yet)');
+    expect(plain).toContain('TIMELINE · #30 (acme-corp/backend-service)');
+    expect(plain).toContain('🤖 claude · preflight-review');
+    expect(plain).toContain('Worker interrupted by user');
+  });
+
+  it('renders single-width dot in dry-run mode without misaligning left column', () => {
+    const data = createEmptyState();
+    upsertPR(data, createMockPR(40));
+
+    const rec: AgentExecutionRecord = {
+      sessionId: 'sess-40-dry',
+      prKey: { owner: 'acme-corp', repo: 'backend-service', number: 40 },
+      agentName: 'agy',
+      playbookName: 'address-comments',
+      driver: 'local',
+      mode: 'dry-run',
+      startedAt: '2026-08-20T10:00:00Z',
+      finishedAt: '2026-08-20T10:01:00Z',
+      durationMs: 60000,
+      status: 'dry-run',
+      summary: 'Dry-run simulation completed',
+    };
+    recordAgentExecution(rec, undefined, tmpDir);
+
+    data.repoPolicies = {
+      'acme-corp/backend-service': { mode: 'dry-run' },
+    };
+
+    const lines = renderAgentsTab({
+      data,
+      width: 120,
+      height: 20,
+      selectedPrIndex: 0,
+      selectedSessionIndex: 0,
+      focusedPane: 'left',
+      expandedSessionIds: new Set(),
+      scrollOffset: 0,
+      cwd: tmpDir,
+    });
+
+    const raw = lines.join('\n');
+    // Ensure yellow single-width ● is used rather than 2-cell emoji 🟡
+    expect(raw).toContain('\x1B[1;33m●\x1B[0m');
+    expect(raw).not.toContain('🟡');
+
+    const plain = lines.map(stripAnsi).join('\n');
+    expect(plain).toContain('● #40 · backend-service');
+    expect(plain).toContain('1 session');
+  });
 });
+
