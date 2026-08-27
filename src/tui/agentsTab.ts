@@ -230,6 +230,7 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
     startedAtStr: string;
     logPath?: string;
     worktreePath?: string;
+    touchedFiles?: string[];
   }
 
   const sessions: DisplaySession[] = [];
@@ -258,6 +259,7 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
         startedAtStr: w.startedAt ? new Date(w.startedAt).toLocaleTimeString() : 'Just now',
         logPath: w.logPath,
         worktreePath: w.worktreePath,
+        touchedFiles: w.touchedFiles,
       });
     }
   }
@@ -275,6 +277,7 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
       summary: r.summary || (r.status === 'completed' ? 'Refactored code and verified unit tests' : r.error || 'Execution stopped'),
       startedAtStr: r.startedAt ? new Date(r.startedAt).toLocaleTimeString() : '',
       logPath: path.join(cwd || process.cwd(), '.overseer', 'logs', `${activeGroup.prKey.owner}-${activeGroup.prKey.repo}-${activeGroup.prKey.number}.log`),
+      touchedFiles: r.touchedFiles,
     });
   }
 
@@ -305,6 +308,12 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
       const startedRow = `${spine}  \x1B[${rgbColor(colors.fgDim)}Started:\x1B[0m ${s.startedAtStr}  \x1B[${rgbColor(colors.fgDim)}Worktree:\x1B[0m \x1B[${rgbColor(colors.fgDim)}${truncateVisual(s.worktreePath || '', rightWidth - 36)}\x1B[0m`;
       rightContentLines.push(truncateVisual(startedRow, rightWidth));
 
+      if (s.touchedFiles && s.touchedFiles.length > 0) {
+        const fileSample = s.touchedFiles.slice(0, 3).join(', ') + (s.touchedFiles.length > 3 ? ` (+${s.touchedFiles.length - 3} more)` : '');
+        const filesRow = `${spine}  \x1B[1;33m⚡ Active Edits (${s.touchedFiles.length} file${s.touchedFiles.length > 1 ? 's' : ''}):\x1B[0m \x1B[33m${truncateVisual(fileSample, rightWidth - 30)}\x1B[0m`;
+        rightContentLines.push(truncateVisual(filesRow, rightWidth));
+      }
+
       const tailLogs = loadSessionTailLog(s.logPath || '', 6);
       if (tailLogs.length > 0) {
         for (const logLine of tailLogs) {
@@ -331,6 +340,12 @@ export function renderAgentsTab(options: RenderAgentsTabOptions): string[] {
 
       const startedRow = `${spine}  \x1B[${rgbColor(colors.fgDim)}Started:\x1B[0m ${s.startedAtStr}  \x1B[${rgbColor(colors.fgDim)}Summary:\x1B[0m ${truncateVisual(s.summary || '', rightWidth - 36)}`;
       rightContentLines.push(truncateVisual(startedRow, rightWidth));
+
+      if (s.touchedFiles && s.touchedFiles.length > 0) {
+        const fileSample = s.touchedFiles.slice(0, 3).join(', ') + (s.touchedFiles.length > 3 ? ` (+${s.touchedFiles.length - 3} more)` : '');
+        const filesRow = `${spine}  \x1B[${rgbColor(colors.fgDim)}Touched (${s.touchedFiles.length} file${s.touchedFiles.length > 1 ? 's' : ''}):\x1B[0m \x1B[${rgbColor(colors.fgDim)}${truncateVisual(fileSample, rightWidth - 30)}\x1B[0m`;
+        rightContentLines.push(truncateVisual(filesRow, rightWidth));
+      }
 
       const sessionLogs = loadSessionTailLog(s.logPath || '', 8);
       if (sessionLogs.length > 0) {

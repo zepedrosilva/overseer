@@ -189,6 +189,9 @@ export interface WorkerHandle {
   logPath?: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
   error?: string;
+  touchedFiles?: string[];
+  lastActivity?: string;
+  lastActivityAt?: number;
 }
 
 // ── Agent Telemetry & Analytics Models ──────────────────────────────────────
@@ -209,6 +212,7 @@ export interface AgentExecutionRecord {
   signal?: string;
   error?: string;
   summary?: string;
+  touchedFiles?: string[];
 }
 
 export interface AgentStatsStore {

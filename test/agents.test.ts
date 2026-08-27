@@ -456,5 +456,83 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(res).toBe(wtPath);
       expect(fs.existsSync(wtPath)).toBe(true);
     });
+
+    it('writes clean, boxless structured log headers and completion markers without legacy ASCII boxes', async () => {
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        agents: {
+          logger: {
+            command: 'node -e "console.log(\'Processing task...\')"',
+            description: 'Logger agent',
+          },
+        },
+      };
+
+      const worker = await dispatchAgent({
+        data: state,
+        pr,
+        config,
+        agentName: 'logger',
+        cwd: tmpDir,
+      });
+
+      // Wait for process to exit and flush logs
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const logFile = path.join(tmpDir, '.overseer', 'logs', `${pr.key.owner}-${pr.key.repo}-${pr.key.number}.log`);
+      expect(fs.existsSync(logFile)).toBe(true);
+      const logContent = fs.readFileSync(logFile, 'utf8');
+
+      // Verify clean lifecycle headers
+      expect(logContent).toContain('=== [');
+      expect(logContent).toContain('DISPATCH: logger');
+      expect(logContent).toContain('COMPLETED in');
+      expect(logContent).toContain('Exit Code: 0');
+      expect(logContent).toContain('Processing task...');
+
+      // Verify NO legacy ASCII box borders exist
+      expect(logContent).not.toContain('┌─');
+      expect(logContent).not.toContain('├─ Live Output Stream');
+      expect(logContent).not.toContain('└─ [Completed');
+    });
+
+    it('formats clean, boxless dry-run simulation log output', async () => {
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        agents: {
+          sim: {
+            command: 'sim-command',
+            description: 'Sim agent',
+          },
+        },
+      };
+
+      await dispatchAgent({
+        data: state,
+        pr,
+        config,
+        agentName: 'sim',
+        mode: 'dry-run',
+        cwd: tmpDir,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const logFile = path.join(tmpDir, '.overseer', 'logs', `${pr.key.owner}-${pr.key.repo}-${pr.key.number}.log`);
+      expect(fs.existsSync(logFile)).toBe(true);
+      const logContent = fs.readFileSync(logFile, 'utf8');
+
+      expect(logContent).toContain('DRY-RUN SIMULATION: sim');
+      expect(logContent).toContain('END SIMULATION');
+      expect(logContent).not.toContain('┌─');
+    });
   });
 });
