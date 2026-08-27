@@ -3,7 +3,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type { PrState, AppConfig } from '../app/types.js';
+import type { AppState, PrState, WorkerHandle, AppConfig } from '../app/types.js';
+import { setWorker, removeWorker, appendLog, updatePRStatus } from '../app/state.js';
+import { buildAgentCommand } from '../agents/index.js';
 
 export function resolveWorktreePath(
   config: AppConfig,

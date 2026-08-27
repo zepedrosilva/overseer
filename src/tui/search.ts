@@ -1,9 +1,9 @@
 // ── Search & Filter Engine ──────────────────────────────────────────────────
 // Substring filtering across PR attributes (no emojis, clean CLI glyphs).
 
-import type { PrState } from '../app/types.js';
+import type { PrState, ViewScope } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { colors, rgbColor } from './colors.js';
+import { colors, rgbColor, getSpinnerChar } from './colors.js';
 import { padEndVisual } from './layout.js';
 
 export function filterPRs(prs: PrState[], query: string): PrState[] {
@@ -48,16 +48,29 @@ export function renderSearchBar(query: string, isSearching: boolean, width: numb
 }
 
 export interface RenderScopeTabBarOptions {
-  scope: 'mine' | 'team';
+  scope: ViewScope;
   mineCount: number;
   teamCount: number;
+  agentsCount?: number;
+  hasRunningAgent?: boolean;
+  agentsEnabled?: boolean;
   teamMembersCount?: number;
   teamName?: string;
+  spinnerTick?: number;
   width: number;
 }
 
 export function renderScopeTabBar(options: RenderScopeTabBarOptions): string {
-  const { scope, mineCount, teamCount, teamMembersCount, teamName, width } = options;
+  const {
+    scope,
+    mineCount,
+    teamCount,
+    agentsCount = 0,
+    hasRunningAgent,
+    agentsEnabled = true,
+    spinnerTick,
+    width,
+  } = options;
 
   const isMine = scope === 'mine';
   const mineDot = isMine ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
@@ -67,11 +80,29 @@ export function renderScopeTabBar(options: RenderScopeTabBarOptions): string {
   const isTeam = scope === 'team';
   const teamDot = isTeam ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
   const teamColor = isTeam ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
-  const displayTeam = teamName ? teamName.replace(/^[^/]+\//, '') : undefined;
-  const teamLabel = displayTeam ? `Team: ${displayTeam}` : 'Team';
-  const membersPart = teamMembersCount !== undefined ? `${teamMembersCount} members · ` : '';
-  const teamBadge = `${teamDot} \x1B[${rgbColor(colors.cyan)}[2]\x1B[0m ${teamColor}${teamLabel} (${membersPart}${teamCount} PRs)\x1B[0m`;
+  const teamBadge = `${teamDot} \x1B[${rgbColor(colors.cyan)}[2]\x1B[0m ${teamColor}Team (${teamCount})\x1B[0m`;
 
-  const leftText = `  \x1B[${rgbColor(colors.fgDim)}[Tab / t]\x1B[0m  ${mineBadge}    ${teamBadge}`;
+  if (!agentsEnabled) {
+    const leftText = `  \x1B[${rgbColor(colors.fgDim)}[Tab / t]\x1B[0m  ${mineBadge}    ${teamBadge}`;
+    return padEndVisual(leftText, width);
+  }
+
+  const isAgents = scope === 'agents';
+  let agentsDot: string;
+
+  if (hasRunningAgent) {
+    const spinner = getSpinnerChar(spinnerTick);
+    const color = isAgents ? rgbColor(colors.green) : rgbColor(colors.fgDim);
+    agentsDot = `\x1B[${color}${spinner}\x1B[0m`;
+  } else {
+    agentsDot = isAgents
+      ? `\x1B[${rgbColor(colors.green)}●\x1B[0m`
+      : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
+  }
+
+  const agentsColor = isAgents ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
+  const agentsBadge = `${agentsDot} \x1B[${rgbColor(colors.cyan)}[3]\x1B[0m ${agentsColor}Agents (${agentsCount})\x1B[0m`;
+
+  const leftText = `  \x1B[${rgbColor(colors.fgDim)}[Tab / t]\x1B[0m  ${mineBadge}    ${teamBadge}    ${agentsBadge}`;
   return padEndVisual(leftText, width);
 }

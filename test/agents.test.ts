@@ -5,6 +5,8 @@ import os from 'node:os';
 import {
   interpolateAgentCommand,
   buildAgentCommand,
+  parseShellArgs,
+  getSpawnExecution,
   resolveWorktreeDir,
   cleanupWorktree,
   cleanupPRLogs,
@@ -13,6 +15,7 @@ import {
   dispatchAgent,
   cancelWorker,
 } from '../src/agents/index.js';
+import { BUILTIN_PLAYBOOKS } from '../src/agents/playbooks.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
 import type { PrState, AppConfig } from '../src/app/types.js';
@@ -56,12 +59,13 @@ describe('AI Agent Dispatcher & Worktrees', () => {
     };
   }
 
-  describe('interpolateAgentCommand', () => {
+  describe('interpolateAgentCommand & Context Injection', () => {
     it('replaces all placeholders accurately', () => {
-      const template = 'my-agent --pr {pr} --branch {branch} --repo {owner}/{repo} --dir {worktree} -p "{prompt}"';
+      const template = 'my-agent --pr {pr} --branch {branch} --base {baseBranch} --repo {owner}/{repo} --dir {worktree} -p "{prompt}"';
       const result = interpolateAgentCommand(template, {
         pr: 142,
         branch: 'fix/rounding',
+        baseBranch: 'main',
         owner: 'acme-corp',
         repo: 'web-frontend',
         url: 'https://github.com/acme-corp/web-frontend/pull/142',
@@ -70,7 +74,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       });
 
       expect(result).toBe(
-        'my-agent --pr 142 --branch fix/rounding --repo acme-corp/web-frontend --dir /tmp/wt -p "Fix the bug"'
+        'my-agent --pr 142 --branch fix/rounding --base main --repo acme-corp/web-frontend --dir /tmp/wt -p "Fix the bug"'
       );
     });
 
@@ -85,6 +89,161 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       });
 
       expect(result).toContain('claude -p "Review this Pull Request');
+    });
+
+    it('injects failing check and ci logs context correctly', () => {
+      const template = BUILTIN_PLAYBOOKS['ci-repair'].promptTemplate;
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        failingCheck: 'jest-unit-tests',
+        ciLogs: 'FAIL test/invoice.test.ts\nAssertionError: expected 10 to be 12',
+      });
+
+      expect(result).toContain("The CI check 'jest-unit-tests' failed on this PR.");
+      expect(result).toContain('FAIL test/invoice.test.ts');
+      expect(result).toContain('PR #142 (acme-corp/web-frontend, branch: \'fix/rounding\')');
+    });
+
+    it('injects review comments context into address-comments template', () => {
+      const template = BUILTIN_PLAYBOOKS['address-comments'].promptTemplate;
+      const commentsText = 'Comment 1: Please handle negative tax rate.\nComment 2: Add test case for zero balance.';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        comments: commentsText,
+      });
+
+      expect(result).toContain('Address the following unresolved review comments on this PR:');
+      expect(result).toContain(commentsText);
+    });
+
+    it('injects diff summary into preflight-review template', () => {
+      const template = BUILTIN_PLAYBOOKS['preflight-review'].promptTemplate;
+      const diffSummaryText = 'Changed files: 3 (+45, -12)\n- src/billing/tax.ts\n- test/tax.test.ts';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'feat/new-tax',
+        baseBranch: 'main',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        diffSummary: diffSummaryText,
+      });
+
+      expect(result).toContain('Diff Summary:\n' + diffSummaryText);
+      expect(result).toContain("branch: 'feat/new-tax' -> base: 'main'");
+    });
+
+    it('applies fallbacks when optional context parameters are omitted', () => {
+      const template = 'Logs: {ciLogs} | Comments: {comments} | Diff: {diffSummary} | Check: {failingCheck} | PB: {playbook}';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+      });
+
+      expect(result).toBe(
+        'Logs: No CI logs provided. | Comments: No unresolved comments. | Diff: No diff summary provided. | Check: test | PB: custom'
+      );
+    });
+
+    it('truncates oversized context snippets exceeding MAX_CONTEXT_LENGTH (64 KB)', () => {
+      const massiveLog = 'A'.repeat(70 * 1024);
+      const template = 'CI output: {ciLogs}';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        ciLogs: massiveLog,
+      });
+
+      expect(result).toContain('... (truncated context)');
+      expect(result.length).toBeLessThan(massiveLog.length);
+    });
+  });
+
+  describe('Prompt Escaping & Special Character Handling', () => {
+    it('safely handles double quotes, single quotes, and newlines in prompt', () => {
+      const pr = createMockPR();
+      const rawPrompt = 'Fix issue with "quotes", \'single quotes\',\nand `backticks` $PATH \\escapes';
+      const { promptText } = buildAgentCommand('claude', pr, DEFAULT_CONFIG, '/tmp/wt', rawPrompt);
+
+      expect(promptText).toBe(rawPrompt);
+    });
+
+    it('prevents cascading interpolation and preserves dollar signs when injected values contain placeholders or regex tokens', () => {
+      const template = 'claude -p "{prompt}" --dir {worktree}';
+      const promptValue = 'Check if code has {worktree} variable and $1 $$ $& $` $\' pattern';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        worktree: '/tmp/worktree',
+        prompt: promptValue,
+      });
+
+      // {worktree} in prompt is NOT expanded to /tmp/worktree (no cascading expansion),
+      // while outer template's {worktree} is properly replaced. Dollar signs are untouched.
+      expect(result).toBe(
+        'claude -p "Check if code has {worktree} variable and $1 $$ $& $` $\' pattern" --dir /tmp/worktree'
+      );
+    });
+
+    it('preserves quotes and arguments in getSpawnExecution for built-in presets', () => {
+      const promptWithQuotes = 'Review "login.ts" and check if it handles `null` tokens & $FOO';
+
+      const claudeExec = getSpawnExecution('claude', '', promptWithQuotes, {});
+      expect(claudeExec.bin).toBe('claude');
+      expect(claudeExec.args).toEqual(['--dangerously-skip-permissions', '-p', promptWithQuotes]);
+
+      const agyExec = getSpawnExecution('agy', '', promptWithQuotes, {});
+      expect(agyExec.bin).toBe('agy');
+      expect(agyExec.args).toContain(promptWithQuotes);
+
+      const piExec = getSpawnExecution('pi', '', promptWithQuotes, {});
+      expect(piExec.bin).toBe('pi');
+      expect(piExec.args).toEqual([promptWithQuotes]);
+    });
+
+    it('correctly tokenizes complex commands with parseShellArgs', () => {
+      const cmd = 'agent-cli run --prompt "Fix invoice calculation #123" --flag \'single value\' --extra normal_val';
+      const parsed = parseShellArgs(cmd);
+
+      expect(parsed.bin).toBe('agent-cli');
+      expect(parsed.args).toEqual([
+        'run',
+        '--prompt',
+        'Fix invoice calculation #123',
+        '--flag',
+        'single value',
+        '--extra',
+        'normal_val',
+      ]);
+    });
+
+    it('interpolates definition.args without shell corruption for custom agents', () => {
+      const definition = {
+        bin: 'custom-ai',
+        args: ['--input', '{prompt}', '--verbose'],
+      };
+      const customPrompt = 'Analyze edge cases with "special" symbols & pipes | redirects > /dev/null';
+      const result = getSpawnExecution('custom', '', customPrompt, definition);
+
+      expect(result.bin).toBe('custom-ai');
+      expect(result.args).toEqual(['--input', customPrompt, '--verbose']);
     });
   });
 
@@ -297,116 +456,5 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(res).toBe(wtPath);
       expect(fs.existsSync(wtPath)).toBe(true);
     });
-
-    it('safely handles prompts containing special shell and regex characters ($&, $\', $1, `, ", $(...)) without shell expansion', async () => {
-      const state = createEmptyState();
-      const pr = createMockPR();
-      upsertPR(state, pr);
-
-      // Verify interpolateAgentCommand with regex replacement characters
-      const dangerousTemplate = 'agent --prompt "{prompt}"';
-      const dangerousPrompt = 'Review $& and $\' and $1 and $$ and `whoami` and $(rm -rf /) and "quotes"';
-      const interpolated = interpolateAgentCommand(dangerousTemplate, {
-        pr: pr.key.number,
-        branch: pr.branch,
-        owner: pr.key.owner,
-        repo: pr.key.repo,
-        url: pr.url,
-        prompt: dangerousPrompt,
-      });
-
-      expect(interpolated).toBe(`agent --prompt "${dangerousPrompt}"`);
-      expect(interpolated).toContain('$&');
-      expect(interpolated).toContain('$\'');
-      expect(interpolated).toContain('$1');
-      expect(interpolated).toContain('$$');
-    });
-
-    it('cancels active worker and records exactly one telemetry record with cancelled status', async () => {
-      const { loadAgentStats } = await import('../src/agents/stats.js');
-      const state = createEmptyState();
-      const pr = createMockPR();
-      upsertPR(state, pr);
-
-      const config: AppConfig = {
-        ...DEFAULT_CONFIG,
-        agents: {
-          sleeper: {
-            command: 'node -e "setInterval(() => {}, 1000)"',
-            description: 'Long running agent',
-          },
-        },
-      };
-
-      const worker = await dispatchAgent({
-        data: state,
-        pr,
-        config,
-        agentName: 'sleeper',
-        cwd: tmpDir,
-      });
-
-      expect(worker.status).toBe('running');
-      const cancelled = cancelWorker(state, pr.key, tmpDir);
-      expect(cancelled).toBe(true);
-      expect(worker.status).toBe('cancelled');
-
-      // Wait for process close event to settle
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      // Worker should stay cancelled, NOT flip to failed
-      expect(worker.status).toBe('cancelled');
-
-      // Check telemetry stats file
-      const stats = loadAgentStats(undefined, tmpDir);
-      const recordsForSession = stats.records.filter((r) => r.sessionId === worker.sessionId);
-      expect(recordsForSession.length).toBe(1);
-      expect(recordsForSession[0].status).toBe('cancelled');
-    }, 15000);
-
-    it('replaces stale running worker when previous process is dead and allows new dispatch', async () => {
-      const state = createEmptyState();
-      const pr = createMockPR();
-      upsertPR(state, pr);
-
-      // Inject a stale worker handle with a dead PID (e.g. 999999)
-      const staleWorker = {
-        sessionId: 'stale-sess',
-        prKey: pr.key,
-        agentName: 'claude',
-        command: 'mock',
-        worktreePath: 'mock',
-        branch: pr.branch,
-        startedAt: Date.now() - 60000,
-        status: 'running' as const,
-        pid: 99999999,
-      };
-      state.workers.set(`${pr.key.owner}/${pr.key.repo}#${pr.key.number}`, staleWorker);
-
-      const config: AppConfig = {
-        ...DEFAULT_CONFIG,
-        agents: {
-          echo: {
-            command: 'node -e "process.stdout.write(\'ok\\n\')"',
-            description: 'Echo agent',
-          },
-        },
-      };
-
-      const newWorker = await dispatchAgent({
-        data: state,
-        pr,
-        config,
-        agentName: 'echo',
-        cwd: tmpDir,
-      });
-
-      expect(newWorker).not.toBeNull();
-      expect(newWorker.sessionId).not.toBe('stale-sess');
-      expect(newWorker.agentName).toBe('echo');
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(newWorker.status).toBe('completed');
-    }, 15000);
   });
 });

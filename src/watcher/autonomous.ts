@@ -17,15 +17,81 @@ import { chunkReviewFeedback } from './feedbackChunker.js';
 export const MAX_CONCURRENT_WORKERS = 2;
 export const MAX_CONSECUTIVE_AUTONOMOUS_RETRIES = 2;
 export const AUTONOMOUS_COOLDOWN_MS = 15 * 1000; // 15s stage cooldown
+export const MAX_BREAKER_ENTRIES = 500;
 
-// In-memory retry & cooldown tracker (ephemeral per process session)
+// In-memory retry & cooldown tracker (synchronized with AppState.circuitBreaker)
 const prRetryCounters = new Map<string, number>();
 const prLastDispatchAt = new Map<string, number>();
 const prReviewedKeys = new Set<string>();
 const prFixedKeys = new Set<string>();
 const prBatchIndex = new Map<string, number>();
 
-export function getPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review'): number {
+export function syncFromCircuitBreaker(data: AppState): void {
+  if (!data.circuitBreaker) {
+    data.circuitBreaker = {
+      retryCounters: {},
+      lastDispatchAt: {},
+      reviewedKeys: [],
+      fixedKeys: [],
+      batchIndex: {},
+    };
+  }
+  const cb = data.circuitBreaker;
+  if (cb.retryCounters) {
+    for (const [k, v] of Object.entries(cb.retryCounters)) {
+      prRetryCounters.set(k, v);
+    }
+  }
+  if (cb.lastDispatchAt) {
+    for (const [k, v] of Object.entries(cb.lastDispatchAt)) {
+      prLastDispatchAt.set(k, v);
+    }
+  }
+  if (Array.isArray(cb.reviewedKeys)) {
+    for (const k of cb.reviewedKeys) {
+      prReviewedKeys.add(k);
+    }
+  }
+  if (Array.isArray(cb.fixedKeys)) {
+    for (const k of cb.fixedKeys) {
+      prFixedKeys.add(k);
+    }
+  }
+  if (cb.batchIndex) {
+    for (const [k, v] of Object.entries(cb.batchIndex)) {
+      prBatchIndex.set(k, v);
+    }
+  }
+}
+
+export function syncToCircuitBreaker(data: AppState): void {
+  if (!data.circuitBreaker) {
+    data.circuitBreaker = {};
+  }
+  data.circuitBreaker.retryCounters = Object.fromEntries(prRetryCounters.entries());
+  data.circuitBreaker.lastDispatchAt = Object.fromEntries(prLastDispatchAt.entries());
+  data.circuitBreaker.reviewedKeys = Array.from(prReviewedKeys);
+  data.circuitBreaker.fixedKeys = Array.from(prFixedKeys);
+  data.circuitBreaker.batchIndex = Object.fromEntries(prBatchIndex.entries());
+}
+
+export function getPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review', data?: AppState): number {
+  if (data?.circuitBreaker?.retryCounters) {
+    if (stage) {
+      return data.circuitBreaker.retryCounters[`${keyStr}:${stage}`] ?? prRetryCounters.get(`${keyStr}:${stage}`) ?? 0;
+    }
+    return (
+      data.circuitBreaker.retryCounters[keyStr] ??
+      data.circuitBreaker.retryCounters[`${keyStr}:ci`] ??
+      data.circuitBreaker.retryCounters[`${keyStr}:fix`] ??
+      data.circuitBreaker.retryCounters[`${keyStr}:review`] ??
+      prRetryCounters.get(keyStr) ??
+      prRetryCounters.get(`${keyStr}:ci`) ??
+      prRetryCounters.get(`${keyStr}:fix`) ??
+      prRetryCounters.get(`${keyStr}:review`) ??
+      0
+    );
+  }
   if (stage) {
     return prRetryCounters.get(`${keyStr}:${stage}`) || 0;
   }
@@ -38,39 +104,97 @@ export function getPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review')
   );
 }
 
-export function resetPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review'): void {
+export function resetPrRetryCount(keyStr: string, stage?: 'ci' | 'fix' | 'review', data?: AppState): void {
   if (stage) {
     prRetryCounters.delete(`${keyStr}:${stage}`);
-    return;
+  } else {
+    prRetryCounters.delete(keyStr);
+    prRetryCounters.delete(`${keyStr}:ci`);
+    prRetryCounters.delete(`${keyStr}:fix`);
+    prRetryCounters.delete(`${keyStr}:review`);
+    prBatchIndex.delete(keyStr);
+    prBatchIndex.delete(`${keyStr}:fix`);
   }
-  prRetryCounters.delete(keyStr);
-  prRetryCounters.delete(`${keyStr}:ci`);
-  prRetryCounters.delete(`${keyStr}:fix`);
-  prRetryCounters.delete(`${keyStr}:review`);
-  prBatchIndex.delete(keyStr);
-  prBatchIndex.delete(`${keyStr}:fix`);
+  if (data?.circuitBreaker) {
+    syncToCircuitBreaker(data);
+  }
 }
 
-export function resetAutonomousState(): void {
+export function resetAutonomousState(data?: AppState): void {
   prRetryCounters.clear();
   prLastDispatchAt.clear();
   prReviewedKeys.clear();
   prFixedKeys.clear();
   prBatchIndex.clear();
+  if (data?.circuitBreaker) {
+    data.circuitBreaker.retryCounters = {};
+    data.circuitBreaker.lastDispatchAt = {};
+    data.circuitBreaker.reviewedKeys = [];
+    data.circuitBreaker.fixedKeys = [];
+    data.circuitBreaker.batchIndex = {};
+  }
 }
 
-function pruneAutonomousCaches(): void {
-  if (prReviewedKeys.size > 500) {
-    prReviewedKeys.clear();
+function trimSet(set: Set<string>, maxSize: number): void {
+  if (set.size > maxSize) {
+    const toRemove = set.size - maxSize;
+    let count = 0;
+    for (const item of set) {
+      set.delete(item);
+      count++;
+      if (count >= toRemove) break;
+    }
   }
-  if (prFixedKeys.size > 500) {
-    prFixedKeys.clear();
+}
+
+function trimMap<K, V>(map: Map<K, V>, maxSize: number): void {
+  if (map.size > maxSize) {
+    const toRemove = map.size - maxSize;
+    let count = 0;
+    for (const key of map.keys()) {
+      map.delete(key);
+      count++;
+      if (count >= toRemove) break;
+    }
   }
-  if (prRetryCounters.size > 500) {
-    prRetryCounters.clear();
+}
+
+export function pruneAutonomousCaches(data?: AppState): void {
+  // 1. Prune timestamps older than 24 hours (cooldowns are only 15s)
+  const now = Date.now();
+  const maxAge = 24 * 60 * 60 * 1000;
+  for (const [k, timestamp] of prLastDispatchAt.entries()) {
+    if (now - timestamp > maxAge) {
+      prLastDispatchAt.delete(k);
+    }
   }
-  if (prLastDispatchAt.size > 500) {
-    prLastDispatchAt.clear();
+
+  // 2. Bound collection sizes by removing oldest entries (FIFO)
+  trimSet(prReviewedKeys, MAX_BREAKER_ENTRIES);
+  trimSet(prFixedKeys, MAX_BREAKER_ENTRIES);
+  trimMap(prRetryCounters, MAX_BREAKER_ENTRIES);
+  trimMap(prLastDispatchAt, MAX_BREAKER_ENTRIES);
+  trimMap(prBatchIndex, MAX_BREAKER_ENTRIES);
+
+  // 3. If data is provided, clean up closed/merged PRs
+  if (data?.prs) {
+    const openKeys = new Set(
+      Array.from(data.prs.values())
+        .filter((p) => p.state === 'OPEN')
+        .map((p) => prKeyToString(p.key))
+    );
+    for (const key of prRetryCounters.keys()) {
+      const baseKey = key.split(':')[0];
+      if (!openKeys.has(baseKey)) {
+        prRetryCounters.delete(key);
+      }
+    }
+    for (const key of prBatchIndex.keys()) {
+      const baseKey = key.split(':')[0];
+      if (!openKeys.has(baseKey)) {
+        prBatchIndex.delete(key);
+      }
+    }
   }
 }
 
@@ -79,38 +203,39 @@ export async function evaluateAutonomousPolicies(
   config: AppConfig,
   cwd?: string
 ): Promise<void> {
-  pruneAutonomousCaches();
-
-  const activeWorkers = Array.from(data.workers.values()).filter(
-    (w) => w.status === 'running'
-  );
-  if (activeWorkers.length >= MAX_CONCURRENT_WORKERS) {
-    return; // Concurrency cap reached
+  if (data.extensions?.agents?.enabled === false) {
+    return;
   }
 
-  const prList = Array.from(data.prs.values());
+  syncFromCircuitBreaker(data);
+  pruneAutonomousCaches(data);
 
-  for (const pr of prList) {
-    const keyStr = prKeyToString(pr.key);
-
-    // If PR is closed or merged, clean up its state
-    if (pr.state !== 'OPEN') {
-      resetPrRetryCount(keyStr);
-      continue;
+  try {
+    const activeWorkers = Array.from(data.workers.values()).filter(
+      (w) => w.status === 'running'
+    );
+    if (activeWorkers.length >= MAX_CONCURRENT_WORKERS) {
+      return; // Concurrency cap reached
     }
 
-    // Reset retry counters if PR reached a healthy / ready state
-    if (pr.overallStatus === 'Ready' || pr.reviewVerdict === 'APPROVED') {
-      resetPrRetryCount(keyStr);
-    }
+    const prList = Array.from(data.prs.values());
+
+    for (const pr of prList) {
+      const keyStr = prKeyToString(pr.key);
+
+      // If PR is closed or merged, clean up its state
+      if (pr.state !== 'OPEN') {
+        resetPrRetryCount(keyStr, undefined, data);
+        continue;
+      }
 
     // Only consider PRs belonging to user or in user scope (prevent running on teammate branches in team scope)
     const isUserPR =
       pr.scope === 'mine' ||
       pr.scope === 'both' ||
+      pr.scope === undefined ||
       (Boolean(data.currentUser && data.currentUser !== 'unknown') &&
-        pr.author.toLowerCase() === data.currentUser?.toLowerCase()) ||
-      (pr.scope === undefined && (!data.currentUser || data.currentUser === 'unknown'));
+        pr.author.toLowerCase() === data.currentUser?.toLowerCase());
 
     if (!isUserPR) {
       continue;
@@ -365,5 +490,8 @@ export async function evaluateAutonomousPolicies(
         continue;
       }
     }
+  }
+  } finally {
+    syncToCircuitBreaker(data);
   }
 }

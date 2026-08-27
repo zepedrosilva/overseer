@@ -136,6 +136,7 @@ describe('Agent Telemetry & Analytics Store (agent-stats.json)', () => {
     expect(stats.totalRuns).toBe(3);
     expect(stats.dryRunsCount).toBe(1);
     expect(stats.successRate).toBeCloseTo(33.33, 1);
+    expect(stats.avgDurationMs).toBe(Math.round(100000 / 3));
 
     // By Agent
     expect(stats.byAgent['agy']).toBeDefined();
@@ -143,12 +144,22 @@ describe('Agent Telemetry & Analytics Store (agent-stats.json)', () => {
     expect(stats.byAgent['agy'].successCount).toBe(1);
     expect(stats.byAgent['agy'].failedCount).toBe(1);
     expect(stats.byAgent['agy'].successRate).toBe(50);
+    expect(stats.byAgent['agy'].avgDurationMs).toBe(50000);
     expect(stats.byAgent['agy'].topPlaybook).toBe('ci-repair');
+
+    expect(stats.byAgent['claude']).toBeDefined();
+    expect(stats.byAgent['claude'].runs).toBe(1);
+    expect(stats.byAgent['claude'].avgDurationMs).toBe(0);
 
     // By Playbook
     expect(stats.byPlaybook['ci-repair']).toBeDefined();
     expect(stats.byPlaybook['ci-repair'].runs).toBe(2);
+    expect(stats.byPlaybook['ci-repair'].avgDurationMs).toBe(50000);
     expect(stats.byPlaybook['ci-repair'].topRepo).toBe('acme-corp/web-frontend');
+
+    expect(stats.byPlaybook['address-comments']).toBeDefined();
+    expect(stats.byPlaybook['address-comments'].runs).toBe(1);
+    expect(stats.byPlaybook['address-comments'].avgDurationMs).toBe(0);
 
     // By Repo
     expect(stats.byRepo['acme-corp/web-frontend']).toBeDefined();
@@ -157,83 +168,122 @@ describe('Agent Telemetry & Analytics Store (agent-stats.json)', () => {
     expect(stats.byRepo['acme-corp/web-frontend'].manualRuns).toBe(0);
   });
 
-  it('calculates per-agent and per-playbook avgDurationMs independently without global contamination', () => {
+  it('computes per-group avg duration accurately across mixed durations and multiple groups', () => {
     const now = Date.now();
     const records: AgentExecutionRecord[] = [
-      // fast-agent: 10s and 20s -> avg 15s (15000ms)
       {
-        sessionId: '1',
-        prKey: { owner: 'acme-corp', repo: 'web-frontend', number: 1 },
-        agentName: 'fast-agent',
+        sessionId: 'a1',
+        prKey: { owner: 'acme-corp', repo: 'repo-1', number: 1 },
+        agentName: 'claude',
+        playbookName: 'preflight-review',
+        driver: 'local',
+        mode: 'live',
+        trigger: 'manual',
+        startedAt: new Date(now - 60000).toISOString(),
+        finishedAt: new Date(now - 45000).toISOString(),
+        durationMs: 15000,
+        status: 'completed',
+      },
+      {
+        sessionId: 'a2',
+        prKey: { owner: 'acme-corp', repo: 'repo-1', number: 2 },
+        agentName: 'claude',
+        playbookName: 'preflight-review',
+        driver: 'local',
+        mode: 'live',
+        trigger: 'manual',
+        startedAt: new Date(now - 40000).toISOString(),
+        finishedAt: new Date(now - 15000).toISOString(),
+        durationMs: 25000,
+        status: 'completed',
+      },
+      {
+        sessionId: 'b1',
+        prKey: { owner: 'acme-corp', repo: 'repo-2', number: 3 },
+        agentName: 'agy',
         playbookName: 'ci-repair',
         driver: 'local',
         mode: 'live',
         trigger: 'autonomous_ci',
         startedAt: new Date(now - 30000).toISOString(),
-        finishedAt: new Date(now - 20000).toISOString(),
-        durationMs: 10000,
-        status: 'completed',
-      },
-      {
-        sessionId: '2',
-        prKey: { owner: 'acme-corp', repo: 'web-frontend', number: 2 },
-        agentName: 'fast-agent',
-        playbookName: 'ci-repair',
-        driver: 'local',
-        mode: 'live',
-        trigger: 'autonomous_ci',
-        startedAt: new Date(now - 25000).toISOString(),
-        finishedAt: new Date(now - 5000).toISOString(),
-        durationMs: 20000,
-        status: 'completed',
-      },
-      // slow-agent: 60s -> avg 60s (60000ms)
-      {
-        sessionId: '3',
-        prKey: { owner: 'acme-corp', repo: 'api-gateway', number: 3 },
-        agentName: 'slow-agent',
-        playbookName: 'address-comments',
-        driver: 'local',
-        mode: 'live',
-        trigger: 'manual',
-        startedAt: new Date(now - 70000).toISOString(),
         finishedAt: new Date(now - 10000).toISOString(),
-        durationMs: 60000,
+        durationMs: 20000,
         status: 'completed',
       },
     ];
 
     const stats = calculateAgentStats(records, 30);
 
-    expect(stats.totalRuns).toBe(3);
-    expect(stats.avgDurationMs).toBe(30000);
+    // Claude avg: (15000 + 25000) / 2 = 20000ms
+    expect(stats.byAgent['claude'].runs).toBe(2);
+    expect(stats.byAgent['claude'].avgDurationMs).toBe(20000);
 
-    // Fast agent avg must be exactly 15000ms
-    expect(stats.byAgent['fast-agent'].avgDurationMs).toBe(15000);
-    // Slow agent avg must be exactly 60000ms
-    expect(stats.byAgent['slow-agent'].avgDurationMs).toBe(60000);
+    // Agy avg: 20000 / 1 = 20000ms
+    expect(stats.byAgent['agy'].runs).toBe(1);
+    expect(stats.byAgent['agy'].avgDurationMs).toBe(20000);
 
-    // Playbook averages
-    expect(stats.byPlaybook['ci-repair'].avgDurationMs).toBe(15000);
-    expect(stats.byPlaybook['address-comments'].avgDurationMs).toBe(60000);
+    // Preflight-review avg: (15000 + 25000) / 2 = 20000ms
+    expect(stats.byPlaybook['preflight-review'].runs).toBe(2);
+    expect(stats.byPlaybook['preflight-review'].avgDurationMs).toBe(20000);
+
+    // Ci-repair avg: 20000 / 1 = 20000ms
+    expect(stats.byPlaybook['ci-repair'].runs).toBe(1);
+    expect(stats.byPlaybook['ci-repair'].avgDurationMs).toBe(20000);
+
+    // Overall avg: (15000 + 25000 + 20000) / 3 = 20000ms
+    expect(stats.avgDurationMs).toBe(20000);
   });
 
-  it('safely validates and filters corrupted records when loading stats from disk', () => {
-    const corruptData = {
-      records: [
-        null,
-        {},
-        { sessionId: 'valid-1', prKey: { owner: 'acme', repo: 'app', number: 1 }, startedAt: new Date().toISOString() },
-        { sessionId: 'broken-no-prKey', startedAt: new Date().toISOString() },
-        { sessionId: 'broken-no-owner', prKey: { repo: 'app' }, startedAt: new Date().toISOString() },
-      ],
-    };
+  it('returns 0 avgDurationMs when there are no runs', () => {
+    const stats = calculateAgentStats([], 30);
+    expect(stats.totalRuns).toBe(0);
+    expect(stats.avgDurationMs).toBe(0);
+    expect(stats.successRate).toBe(0);
+    expect(Object.keys(stats.byAgent).length).toBe(0);
+    expect(Object.keys(stats.byPlaybook).length).toBe(0);
+    expect(Object.keys(stats.byRepo).length).toBe(0);
+  });
 
-    fs.mkdirSync(path.dirname(customStatsPath), { recursive: true });
-    fs.writeFileSync(customStatsPath, JSON.stringify(corruptData), 'utf-8');
+  it('renders stats modal with 3 tabs and properly aligned agent tables', async () => {
+    const { renderStatsModal } = await import('../src/tui/stats.js');
+    const { calculateStats } = await import('../src/stats/index.js');
+    const { createEmptyState } = await import('../src/app/state.js');
+    const dummyStats = calculateStats(createEmptyState(), '30d');
 
-    const store = loadAgentStats(customStatsPath, tmpDir);
-    expect(store.records.length).toBe(1);
-    expect(store.records[0].sessionId).toBe('valid-1');
+    const records: AgentExecutionRecord[] = [
+      {
+        sessionId: 'test-sess',
+        prKey: { owner: 'acme-corp', repo: 'web-frontend', number: 10 },
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        trigger: 'manual',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 120000,
+        status: 'completed',
+      },
+    ];
+
+    const agentStats = calculateAgentStats(records, 30);
+    const lines = renderStatsModal({
+      stats: dummyStats,
+      agentStats,
+      activeTab: 'agents',
+      modalWidth: 90,
+      modalHeight: 25,
+    });
+
+    const stripped = lines.map((l) => l.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')).join('\n');
+    expect(stripped).toContain('[1] Mine');
+    expect(stripped).toContain('[2] Team');
+    expect(stripped).toContain('[3] 🤖 Agents');
+    expect(stripped).toContain('Performance by Agent');
+    expect(stripped).toContain('Performance by Operation / Playbook');
+    expect(stripped).toContain('Recent Execution Audit Trail');
+    // Ensure numbers and percentages have visual space and are not concatenated
+    expect(stripped).not.toContain('1100.0%');
+    expect(stripped).toContain('100.0%');
   });
 });

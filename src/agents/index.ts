@@ -265,6 +265,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     options.mode === 'dry-run' ||
     (options.mode === undefined && repoMode === 'dry-run')
   );
+  const effectiveMode = isDryRun ? 'dry-run' : 'live';
 
   // 1. Resolve Playbook & Injected Context
   const agentsConfig = loadAgentsConfig(cwd);
@@ -644,17 +645,47 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
       }
     }
 
-    // If fixer completed and push is allowed, check for changes and push
-    if ((playbookName === 'address-comments' || playbookName === 'ci-repair') && isSuccess && allowPush) {
+    // For mutable playbooks, commit and push any uncommitted edits or unpushed commits on clean exit
+    if (code === 0 && !playbookDef.readOnly && playbookName !== 'preflight-review') {
       try {
         const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
         if (statusOut.trim().length > 0) {
-          await execFileAsync('git', ['commit', '-am', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
-          await execFileAsync('git', ['push', '--force-with-lease', 'origin', pr.branch], { cwd: worktreePath });
-          appendLog(data, pr.key, `Fixer agent pushed fixes to branch '${pr.branch}'`);
+          await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+          await execFileAsync('git', ['commit', '-m', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
         }
-      } catch {
-        // Fallback
+
+        // Check if local branch has commits to push
+        let shouldPush = true;
+        try {
+          const { stdout: revOut } = await execFileAsync('git', ['rev-list', `origin/${pr.branch}..HEAD`, '--count'], { cwd: worktreePath });
+          if (parseInt(revOut.trim(), 10) === 0) {
+            shouldPush = false;
+          }
+        } catch {
+          // If tracking branch check fails, attempt push directly
+        }
+
+        if (shouldPush) {
+          await execFileAsync('git', ['push', 'origin', pr.branch], { cwd: worktreePath });
+          appendLog(data, pr.key, `Fixer agent pushed fixes to branch '${pr.branch}'`);
+          try {
+            if (logStream && !logStream.destroyed) {
+              logStream.write(`\n[Overseer]: Successfully pushed commits to origin/${pr.branch}\n`);
+            }
+          } catch {
+            // Ignore logStream write errors
+          }
+        }
+      } catch (pushErr) {
+        const errMsg = (pushErr as Error).message;
+        appendLog(data, pr.key, `Failed to push fixes to branch '${pr.branch}': ${errMsg}`);
+        try {
+          if (logStream && !logStream.destroyed) {
+            logStream.write(`\n[Overseer Warning]: git push failed: ${errMsg}\n`);
+          }
+        } catch {
+          // Ignore logStream write errors
+        }
       }
     }
 

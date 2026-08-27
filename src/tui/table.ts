@@ -21,6 +21,7 @@ export interface RenderTableOptions {
   currentUser?: string;
   workers?: Map<string, WorkerHandle>;
   repoPolicies?: Record<string, RepoPolicyConfig>;
+  agentsEnabled?: boolean;
   teamProfiles?: Record<string, { login: string; name?: string }>;
   spinnerTick?: number;
 }
@@ -168,9 +169,10 @@ export function renderTable(options: RenderTableOptions): string[] {
 
     // Solid cyan marker on selected row
     const marker = isSelected ? `\x1B[${rgbColor(colors.cyan)}▎\x1B[0m ` : '  ';
-    const worker = options.workers?.get(prKeyToString(pr.key));
-    const isWorkerRunning = worker?.status === 'running';
-    const isDryRunWorker = worker?.status === 'dry-run';
+    const agentsEnabled = options.agentsEnabled !== false;
+    const worker = agentsEnabled ? options.workers?.get(prKeyToString(pr.key)) : undefined;
+    const isWorkerRunning = Boolean(worker && worker.status === 'running');
+    const isDryRunWorker = Boolean(worker && worker.status === 'dry-run');
 
     let sIcon = statusIcon(pr.overallStatus);
     let sName = pr.overallStatus.slice(0, 6).padEnd(6);
@@ -196,22 +198,24 @@ export function renderTable(options: RenderTableOptions): string[] {
     else if (revBadge.kind === 'pending') revColorHex = colors.yellow;
 
     const revText = padEndVisual(truncateVisual(revBadge.text, revColWidth), revColWidth);
+    const repoName = truncateVisual(pr.key.repo, repoColWidth).padEnd(repoColWidth);
     const prNum = `#${pr.key.number}`.padEnd(6);
     const profile = options.teamProfiles?.[pr.author.toLowerCase()];
     const rawAuthor = profile?.name || pr.author;
     const authorName = isTeam ? truncateVisual(rawAuthor, authorColWidth).padEnd(authorColWidth) : '';
     const branch = truncateVisual(pr.branch, branchColWidth).padEnd(branchColWidth);
 
-    // Check Repo Policy Mode indicator (🟢 LIVE / 🟡 DRY-RUN / ⚪ OFF)
+    // Check Repo Policy Mode indicator (🟢 LIVE / 🟡 DRY-RUN / ⚪ OFF) when agents are enabled
     const repoKey = `${pr.key.owner}/${pr.key.repo}`.toLowerCase();
     const repoPolicy = options.repoPolicies?.[repoKey] || options.repoPolicies?.['*'];
     const repoMode = repoPolicy?.mode || 'off';
-    const modeDot =
-      repoMode === 'live'
-        ? `\x1B[${rgbColor(colors.green)}●\x1B[0m `
+    const modeDot = agentsEnabled
+      ? repoMode === 'live'
+        ? `\x1B[1;32m●\x1B[0m `
         : repoMode === 'dry-run'
-        ? `\x1B[${rgbColor(colors.yellow)}○\x1B[0m `
-        : '';
+        ? `\x1B[1;33m🟡\x1B[0m `
+        : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m `
+      : '';
     const modeDotLen = modeDot ? 2 : 0;
     const availableRepoWidth = Math.max(2, repoColWidth - modeDotLen);
 

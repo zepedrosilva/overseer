@@ -10,6 +10,7 @@ import {
   createEmptyState,
   appStateToAppConfig,
   getAgentDefinition as getAgentDefFromState,
+  getRepoAgent as getRepoAgentFromState,
 } from './app/state.js';
 
 export const DEFAULT_CONFIG: AppConfig = {

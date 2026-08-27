@@ -129,6 +129,29 @@ describe('State Store & Persistence', () => {
       expect(loadedWorker?.sessionId).toBe('test-session-1');
     });
 
+    it('persists and restores circuitBreaker state correctly', () => {
+      const state = createEmptyState();
+      state.circuitBreaker = {
+        retryCounters: { 'acme-corp/web-frontend#142:ci': 2 },
+        lastDispatchAt: { 'acme-corp/web-frontend#142:ci': 1700000000 },
+        reviewedKeys: ['acme-corp/web-frontend#142@rev1'],
+        fixedKeys: ['acme-corp/web-frontend#142@comments-2-1@rev1'],
+        batchIndex: { 'acme-corp/web-frontend#142:fix': 1 },
+      };
+
+      saveState(state, customStatePath);
+
+      const loaded = loadState(customStatePath);
+      expect(loaded).not.toBeNull();
+      expect(loaded?.circuitBreaker).toEqual({
+        retryCounters: { 'acme-corp/web-frontend#142:ci': 2 },
+        lastDispatchAt: { 'acme-corp/web-frontend#142:ci': 1700000000 },
+        reviewedKeys: ['acme-corp/web-frontend#142@rev1'],
+        fixedKeys: ['acme-corp/web-frontend#142@comments-2-1@rev1'],
+        batchIndex: { 'acme-corp/web-frontend#142:fix': 1 },
+      });
+    });
+
     it('returns null when state file does not exist', () => {
       expect(loadState(path.join(tmpDir, 'nonexistent.json'))).toBeNull();
     });

@@ -124,8 +124,8 @@ index abcdef1..2345678 100644
       expect(fullText).toContain('Diff: acme-corp/web-frontend#142');
       expect(fullText).toContain('[File 1]');
       expect(fullText).toContain('[n/p] file');
-      expect(fullText).toContain('[j/k] scroll');
-      expect(fullText).toContain('[o] open');
+      expect(fullText).toContain('[↑/↓] scroll');
+      expect(fullText).toContain('[Esc to close]');
       expect(fullText).toContain('[m] merge');
       expect(fullText).toContain('[a] agent');
     });

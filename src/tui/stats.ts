@@ -7,16 +7,17 @@ import type {
   StatsTimeframe,
   LeaderboardSort,
   AgentAggregatedStats,
+  ViewScope,
 } from '../app/types.js';
 import { colors, rgbColor } from './colors.js';
-import { padEndVisual, visualLength, truncateVisual } from './layout.js';
+import { padEndVisual, padStartVisual, visualLength, truncateVisual } from './layout.js';
 
 export interface RenderStatsModalOptions {
   stats: AggregatedStats;
   agentStats?: AgentAggregatedStats;
-  activeTab?: 'pr' | 'agents';
+  activeTab?: 'mine' | 'team' | 'agents' | 'pr';
   timeframe?: StatsTimeframe;
-  scope: 'mine' | 'team';
+  scope?: ViewScope;
   sortBy?: LeaderboardSort;
   teamName?: string;
   modalWidth: number;
@@ -36,8 +37,8 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
   const {
     stats,
     agentStats,
-    activeTab = 'pr',
-    scope,
+    activeTab,
+    scope = 'mine',
     sortBy = 'merged30',
     teamName,
     modalWidth,
@@ -48,13 +49,26 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
   const outputLines: string[] = [];
 
   const cleanTeam = teamName ? teamName.replace(/^[^/]+\//, '') : 'Team';
-  const scopeLabel = scope === 'team' ? `Team: ${cleanTeam}` : 'Mine';
+
+  // Normalize active tab
+  const resolvedTab: 'mine' | 'team' | 'agents' =
+    activeTab === 'agents'
+      ? 'agents'
+      : activeTab === 'team' || (!activeTab && scope === 'team') || (activeTab === 'pr' && scope === 'team')
+      ? 'team'
+      : 'mine';
+
+  const isMineTab = resolvedTab === 'mine';
+  const isTeamTab = resolvedTab === 'team';
+  const isAgentTab = resolvedTab === 'agents';
 
   // 1. Top Header Border
-  const titleLeft =
-    activeTab === 'agents'
-      ? ` 🤖 Agent Operations & Interventions (${stats.timeframe || '30d'} trailing)`
-      : ` PR Stats & Leaderboard: ${scopeLabel} (${stats.timeframe || '30d'} trailing)`;
+  const titleLeft = isAgentTab
+    ? ` 🤖 Agent Operations & Interventions (${stats.timeframe || '30d'} trailing)`
+    : isTeamTab
+    ? ` PR Stats & Leaderboard: Team: ${cleanTeam} (${stats.timeframe || '30d'} trailing)`
+    : ` PR Stats & Velocity: Mine (${stats.timeframe || '30d'} trailing)`;
+
   const titleRight = ` [Esc to close] `;
   const availableDash = modalWidth - visualLength(titleLeft) - visualLength(titleRight) - 4;
 
@@ -79,19 +93,17 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     outputLines.push(`\x1B[${rgbColor(colors.cyan)}├─${div}─┤\x1B[0m`);
   };
 
-  // 2. View Sub-Tabs (PR Velocity vs Agent Telemetry)
-  const isPrTab = activeTab === 'pr';
-  const isAgentTab = activeTab === 'agents';
+  // 2. View Tabs (1:1 with Main Application Scopes: [1] Mine  [2] Team  [3] Agents)
+  const mineDot = isMineTab ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
+  const mineText = isMineTab ? '\x1B[1;37m[1] Mine\x1B[0m' : `\x1B[${rgbColor(colors.fgDim)}[1] Mine\x1B[0m`;
 
-  const prTabBadge = isPrTab
-    ? `\x1B[${rgbColor(colors.green)}●\x1B[0m \x1B[1;37m[p] PR Velocity & Team\x1B[0m`
-    : `\x1B[${rgbColor(colors.fgDim)}○ [p] PR Velocity & Team\x1B[0m`;
+  const teamDot = isTeamTab ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
+  const teamText = isTeamTab ? `\x1B[1;37m[2] Team (${cleanTeam})\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}[2] Team (${cleanTeam})\x1B[0m`;
 
-  const agentTabBadge = isAgentTab
-    ? `\x1B[${rgbColor(colors.green)}●\x1B[0m \x1B[1;37m[a] 🤖 Agent Interventions\x1B[0m`
-    : `\x1B[${rgbColor(colors.fgDim)}○ [a] 🤖 Agent Interventions\x1B[0m`;
+  const agentDot = isAgentTab ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
+  const agentText = isAgentTab ? '\x1B[1;37m[3] 🤖 Agents\x1B[0m' : `\x1B[${rgbColor(colors.fgDim)}[3] 🤖 Agents\x1B[0m`;
 
-  addLine(`View: ${prTabBadge}    ${agentTabBadge}`);
+  addLine(`Tabs: \x1B[${rgbColor(colors.fgDim)}[Tab/1-3]\x1B[0m  ${mineDot} ${mineText}    ${teamDot} ${teamText}    ${agentDot} ${agentText}`);
   addDivider();
 
   // ── RENDER AGENT TELEMETRY TAB ─────────────────────────────────────────────
@@ -118,21 +130,21 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     if (agents.length > 0) {
       addLine(`\x1B[1;37m📊 Performance by Agent\x1B[0m`);
       const aHead =
-        `  AGENT`.padEnd(16) +
-        `DISPATCHES`.padStart(12) +
-        `SUCCESS %`.padStart(12) +
-        `AVG TIME`.padStart(12) +
-        `FAILED`.padStart(10) +
+        padEndVisual(`  AGENT`, 18) +
+        padStartVisual(`DISPATCHES`, 12) +
+        padStartVisual(`SUCCESS %`, 12) +
+        padStartVisual(`AVG TIME`, 12) +
+        padStartVisual(`FAILED`, 10) +
         `  TOP PLAYBOOK`;
       addLine(`\x1B[${rgbColor(colors.fgDim)}${aHead}\x1B[0m`);
 
       for (const [agentName, s] of agents) {
-        const agCol = `  \x1B[1;37m${agentName}\x1B[0m`.padEnd(16 + 10);
-        const runsCol = String(s.runs).padStart(12);
+        const agCol = padEndVisual(`  \x1B[1;37m${agentName}\x1B[0m`, 18);
+        const runsCol = padStartVisual(String(s.runs), 12);
         const sColor = s.successRate >= 85 ? colors.green : s.successRate >= 70 ? colors.yellow : colors.red;
-        const rateCol = `\x1B[${rgbColor(sColor)}${s.successRate.toFixed(1)}%\x1B[0m`.padStart(12 + 10);
-        const timeCol = formatDurationMs(s.avgDurationMs).padStart(12);
-        const failCol = String(s.failedCount).padStart(10);
+        const rateCol = padStartVisual(`\x1B[${rgbColor(sColor)}${s.successRate.toFixed(1)}%\x1B[0m`, 12);
+        const timeCol = padStartVisual(formatDurationMs(s.avgDurationMs), 12);
+        const failCol = padStartVisual(String(s.failedCount), 10);
         const topPb = s.topPlaybook ? `  \x1B[${rgbColor(colors.cyan)}${s.topPlaybook}\x1B[0m` : '  —';
 
         addLine(`${agCol}${runsCol}${rateCol}${timeCol}${failCol}${topPb}`);
@@ -145,19 +157,19 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     if (playbooks.length > 0) {
       addLine(`\x1B[1;37m🛠️ Performance by Operation / Playbook\x1B[0m`);
       const pHead =
-        `  PLAYBOOK`.padEnd(20) +
-        `RUNS`.padStart(10) +
-        `SUCCESS %`.padStart(12) +
-        `AVG TIME`.padStart(12) +
+        padEndVisual(`  PLAYBOOK`, 22) +
+        padStartVisual(`RUNS`, 10) +
+        padStartVisual(`SUCCESS %`, 12) +
+        padStartVisual(`AVG TIME`, 12) +
         `  TOP TARGET REPOSITORY`;
       addLine(`\x1B[${rgbColor(colors.fgDim)}${pHead}\x1B[0m`);
 
       for (const [pbName, s] of playbooks) {
-        const pbCol = `  \x1B[${rgbColor(colors.cyan)}${pbName}\x1B[0m`.padEnd(20 + 10);
-        const runsCol = String(s.runs).padStart(10);
+        const pbCol = padEndVisual(`  \x1B[${rgbColor(colors.cyan)}${pbName}\x1B[0m`, 22);
+        const runsCol = padStartVisual(String(s.runs), 10);
         const sColor = s.successRate >= 85 ? colors.green : s.successRate >= 70 ? colors.yellow : colors.red;
-        const rateCol = `\x1B[${rgbColor(sColor)}${s.successRate.toFixed(1)}%\x1B[0m`.padStart(12 + 10);
-        const timeCol = formatDurationMs(s.avgDurationMs).padStart(12);
+        const rateCol = padStartVisual(`\x1B[${rgbColor(sColor)}${s.successRate.toFixed(1)}%\x1B[0m`, 12);
+        const timeCol = padStartVisual(formatDurationMs(s.avgDurationMs), 12);
         const topR = s.topRepo ? `  \x1B[${rgbColor(colors.fgDim)}${s.topRepo}\x1B[0m` : '  —';
 
         addLine(`${pbCol}${runsCol}${rateCol}${timeCol}${topR}`);
@@ -170,26 +182,26 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     if (repos.length > 0) {
       addLine(`\x1B[1;37m🏢 Intervention Breakdown by Repository\x1B[0m`);
       const rHead =
-        `  REPOSITORY`.padEnd(32) +
-        `RUNS`.padStart(8) +
-        `AUTO / MAN`.padStart(12) +
-        `SUCCESS %`.padStart(12) +
-        `  MODE`.padEnd(10) +
+        padEndVisual(`  REPOSITORY`, 30) +
+        padStartVisual(`RUNS`, 8) +
+        padStartVisual(`AUTO / MAN`, 14) +
+        padStartVisual(`SUCCESS %`, 12) +
+        padEndVisual(`  MODE`, 12) +
         `AGENT`;
       addLine(`\x1B[${rgbColor(colors.fgDim)}${rHead}\x1B[0m`);
 
       for (const [repoSlug, s] of repos) {
-        const rCol = `  \x1B[1;37m${truncateVisual(repoSlug, 28)}\x1B[0m`.padEnd(32 + 10);
-        const runsCol = String(s.runs).padStart(8);
-        const autoManCol = `${s.autoRuns}/${s.manualRuns}`.padStart(12);
+        const rCol = padEndVisual(`  \x1B[1;37m${truncateVisual(repoSlug, 26)}\x1B[0m`, 30);
+        const runsCol = padStartVisual(String(s.runs), 8);
+        const autoManCol = padStartVisual(`${s.autoRuns}/${s.manualRuns}`, 14);
         const sColor = s.successRate >= 85 ? colors.green : s.successRate >= 70 ? colors.yellow : colors.red;
-        const rateCol = `\x1B[${rgbColor(sColor)}${s.successRate.toFixed(1)}%\x1B[0m`.padStart(12 + 10);
+        const rateCol = padStartVisual(`\x1B[${rgbColor(sColor)}${s.successRate.toFixed(1)}%\x1B[0m`, 12);
         const modeBadge =
           s.mode === 'live'
-            ? `  \x1B[${rgbColor(colors.green)}🟢 LIVE\x1B[0m  `
+            ? padEndVisual(`  \x1B[${rgbColor(colors.green)}🟢 LIVE\x1B[0m`, 12)
             : s.mode === 'dry-run'
-            ? `  \x1B[${rgbColor(colors.yellow)}🟡 DRY\x1B[0m   `
-            : `  \x1B[${rgbColor(colors.fgDim)}⚪ OFF\x1B[0m   `;
+            ? padEndVisual(`  \x1B[${rgbColor(colors.yellow)}🟡 DRY\x1B[0m`, 12)
+            : padEndVisual(`  \x1B[${rgbColor(colors.fgDim)}⚪ OFF\x1B[0m`, 12);
         const agentCol = `\x1B[${rgbColor(colors.cyan)}${s.defaultAgent}\x1B[0m`;
 
         addLine(`${rCol}${runsCol}${autoManCol}${rateCol}${modeBadge}${agentCol}`);
@@ -212,9 +224,14 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
             : `\x1B[${rgbColor(colors.red)}✖ Failed\x1B[0m`;
         const dur = formatDurationMs(r.durationMs);
 
-        addLine(
-          `  \x1B[${rgbColor(colors.fgDim)}${timeStr}\x1B[0m  \x1B[1;37m${prStr.padEnd(26)}\x1B[0m \x1B[${rgbColor(colors.cyan)}${r.agentName.padEnd(8)}\x1B[0m \x1B[${rgbColor(colors.fgDim)}${r.playbookName.padEnd(16)}\x1B[0m ${dur.padStart(8)}  ${outcome}`
-        );
+        const timeCol = padEndVisual(`  \x1B[${rgbColor(colors.fgDim)}${timeStr}\x1B[0m`, 12);
+        const prCol = padEndVisual(`\x1B[1;37m${prStr}\x1B[0m`, 28);
+        const agentCol = padEndVisual(`\x1B[${rgbColor(colors.cyan)}${r.agentName}\x1B[0m`, 10);
+        const pbCol = padEndVisual(`\x1B[${rgbColor(colors.fgDim)}${r.playbookName}\x1B[0m`, 20);
+        const durCol = padStartVisual(dur, 8);
+        const outcomeCol = `  ${outcome}`;
+
+        addLine(`${timeCol}${prCol}${agentCol}${pbCol}${durCol}${outcomeCol}`);
       }
     } else {
       addLine(`\x1B[${rgbColor(colors.fgDim)}No recent agent executions recorded in ./.overseer/agent-stats.json\x1B[0m`);
@@ -236,15 +253,7 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     return outputLines;
   }
 
-  // ── RENDER PR VELOCITY & TEAM TAB ──────────────────────────────────────────
-  const isMine = scope === 'mine';
-  const mineDot = isMine ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
-  const mineText = isMine ? '\x1B[1;37mMine\x1B[0m' : `\x1B[${rgbColor(colors.fgDim)}Mine\x1B[0m`;
-
-  const isTeam = scope === 'team';
-  const teamDot = isTeam ? `\x1B[${rgbColor(colors.green)}●\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
-  const teamText = isTeam ? `\x1B[1;37mTeam: ${cleanTeam}\x1B[0m` : `\x1B[${rgbColor(colors.fgDim)}Team: ${cleanTeam}\x1B[0m`;
-
+  // ── RENDER MINE / TEAM PR VELOCITY & LEADERBOARD ───────────────────────────
   const currentTimeframe = stats.timeframe || '30d';
   const tfList: StatsTimeframe[] = ['7d', '14d', '30d', '60d', '90d'];
   const tfBadges = tfList
@@ -270,11 +279,9 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
   };
   const sortLabel = sortNames[sortBy];
 
-  const scopeTabs = `Scope: \x1B[${rgbColor(colors.fgDim)}[Tab/t]\x1B[0m ${mineDot} ${mineText}  ${teamDot} ${teamText}`;
   const tfTabs = `Timeframe: \x1B[${rgbColor(colors.fgDim)}[1-5/w]\x1B[0m ${tfBadges}`;
-  const sortTabs = isTeam ? `    Sort: \x1B[${rgbColor(colors.fgDim)}[s]\x1B[0m \x1B[1;37m● ${sortLabel}\x1B[0m` : '';
+  const sortTabs = isTeamTab ? `    Sort: \x1B[${rgbColor(colors.fgDim)}[s]\x1B[0m \x1B[1;37m● ${sortLabel}\x1B[0m` : '';
 
-  addLine(scopeTabs);
   addLine(`${tfTabs}${sortTabs}`);
   addDivider();
 
@@ -387,7 +394,7 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
   renderCardRow(row2Cards);
 
   // Stack-Ranked Leaderboard Section (in Team View)
-  if (scope === 'team') {
+  if (isTeamTab) {
     addDivider();
     if (!teamName || teamName.trim() === '') {
       addLine(
@@ -473,7 +480,7 @@ export function renderStatsModal(options: RenderStatsModalOptions): string[] {
     }
   }
 
-  const footerHelp = ` [1-5/w] timeframe  [Tab] scope  [s] sort  [a] agent tab  [b] backfill  [Esc/p] close `;
+  const footerHelp = ` [Tab/1-3] switch tab  [w] timeframe  [s] sort  [b] backfill  [Esc] close `;
   const botDash = Math.max(0, modalWidth - visualLength(footerHelp) - 4);
   const botBorder = `\x1B[${rgbColor(colors.cyan)}└─\x1B[${rgbColor(colors.fgDim)}${footerHelp}\x1B[0m\x1B[${rgbColor(colors.cyan)}${'─'.repeat(botDash)}─┘\x1B[0m`;
   outputLines.push(padEndVisual(botBorder, modalWidth));

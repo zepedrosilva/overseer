@@ -7,6 +7,8 @@ import { prKeyToString } from './app/types.js';
 import {
   loadState,
   saveState,
+  loadSettings,
+  saveSettings,
   resetState,
   resetSettings,
   resetAll,
@@ -26,16 +28,19 @@ import {
   mergePR,
   closePR,
   addComment,
+  viewPRDiffInteractive,
 } from './watcher/gh.js';
 import { pollAllRepos } from './watcher/index.js';
 import { dispatchAgent, cancelWorker } from './agents/index.js';
 import { resetAgentStats } from './agents/stats.js';
-import { cleanupPRArtifacts } from './agents/worktree.js';
+import { resolveWorktreeDir, cleanupWorktree, cleanupPRArtifacts } from './agents/worktree.js';
+import { backfillHistoricalStats } from './stats/index.js';
 
 interface CliArgs {
   api?: boolean;
   port?: number;
   agent?: string;
+  agents?: boolean;
   poll?: number;
   pollTeam?: number;
   dryRun?: boolean;
@@ -58,6 +63,10 @@ function parseCliArgs(): CliArgs {
       result.api = true;
     } else if (arg === '--no-api' || arg === '--api=false') {
       result.api = false;
+    } else if (arg === '--agents' || arg === '--agents=true') {
+      result.agents = true;
+    } else if (arg === '--no-agents' || arg === '--agents=false' || arg === '--disable-agents') {
+      result.agents = false;
     } else if (arg === '--port' || arg === '--api-port') {
       const p = parseInt(args[++i], 10);
       if (!isNaN(p)) result.port = p;
@@ -124,6 +133,10 @@ async function main(): Promise<void> {
   // 2. Apply CLI flags on top of loaded settings & extensions
   if (cli.api !== undefined) data.extensions.api.enabled = cli.api;
   if (cli.port !== undefined) data.extensions.api.port = cli.port;
+  if (cli.agents !== undefined) {
+    if (!data.extensions.agents) data.extensions.agents = { enabled: true };
+    data.extensions.agents.enabled = cli.agents;
+  }
   if (cli.agent !== undefined) data.settings.defaultAgent = cli.agent;
   if (cli.poll !== undefined) data.settings.pollIntervalSecs = Math.max(5, cli.poll);
   if (cli.pollTeam !== undefined) data.settings.teamPollIntervalSecs = Math.max(10, cli.pollTeam);
@@ -194,11 +207,49 @@ async function main(): Promise<void> {
   async function handleAction(action: string, payload?: Record<string, unknown>): Promise<void> {
     const pr = (payload?.pr as PrState) || tui?.getSelectedPR();
 
-    if (action === 'recheck') {
+    if (action === 'recheck' || action === 'poll') {
       const targetScope = data.viewScope === 'team' ? 'team' : 'mine';
       appendLog(data, pr?.key || { owner: 'all', repo: 'repos', number: 0 }, `Manual ${targetScope} refresh requested`);
       await runPollCycle(targetScope);
       tui?.render();
+      return;
+    }
+
+    if (action === 'backfill') {
+      const timeframeDays =
+        typeof payload?.timeframeDays === 'number'
+          ? payload.timeframeDays
+          : typeof payload?.days === 'number'
+          ? payload.days
+          : 90;
+      const forceRefresh = Boolean(payload?.forceRefresh);
+      appendLog(
+        data,
+        pr?.key || { owner: 'all', repo: 'repos', number: 0 },
+        `Historical stats backfill requested (${timeframeDays}d${forceRefresh ? ', force refresh' : ''})`
+      );
+      tui?.showMessage(`Starting ${timeframeDays}-day stats backfill...`);
+      try {
+        await backfillHistoricalStats(
+          data,
+          timeframeDays,
+          (progress) => {
+            apiServer?.broadcast('backfillProgress', progress);
+          },
+          forceRefresh
+        );
+        saveState(data);
+        tui?.showMessage(`Backfill completed (${timeframeDays}d)!`);
+        tui?.render();
+        apiServer?.broadcast('statsUpdated', { timeframeDays });
+      } catch (err) {
+        appendLog(
+          data,
+          pr?.key || { owner: 'all', repo: 'repos', number: 0 },
+          `Backfill error: ${(err as Error).message}`
+        );
+        tui?.showMessage(`Backfill error: ${(err as Error).message}`);
+      }
       return;
     }
 
@@ -208,6 +259,20 @@ async function main(): Promise<void> {
     }
 
     const keyStr = prKeyToString(pr.key);
+
+    if (action === 'cancel-agent') {
+      const cancelled = cancelWorker(data, pr.key);
+      if (cancelled) {
+        appendLog(data, pr.key, 'Agent worker cancelled');
+        saveState(data);
+        tui?.render();
+        apiServer?.broadcast('workerUpdated', { key: keyStr, status: 'cancelled' });
+        tui?.showMessage(`Agent worker for ${keyStr} cancelled`);
+      } else {
+        tui?.showMessage(`No active agent worker found for ${keyStr}`);
+      }
+      return;
+    }
 
     if (action === 'open') {
       try {
@@ -301,25 +366,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (action === 'cancel-agent') {
-      if (pr) {
-        const cancelled = cancelWorker(data, pr.key);
-        if (cancelled) {
-          tui?.showMessage(`Cancelled agent worker for ${keyStr}`);
-          apiServer?.broadcast('workerUpdated', { key: keyStr, status: 'cancelled' });
-        } else {
-          tui?.showMessage(`No active agent running for ${keyStr}`);
-        }
-        tui?.render();
-      }
-      return;
-    }
-
     if (action === 'agent') {
       const prompt = typeof payload?.prompt === 'string' && payload.prompt.length > 0 ? payload.prompt : undefined;
       const agentName = (payload?.agentName as string) || (pr ? getRepoAgent(data, pr.key) : data.settings.defaultAgent);
       const playbookName = (payload?.playbookName as string) || (prompt ? 'custom' : undefined);
-      const trigger = (payload?.trigger as 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api' | undefined) || (payload?.source === 'api' ? 'api' : 'manual');
 
       tui?.showMessage(`Dispatching agent '${agentName}' for ${keyStr}...`);
       dispatchAgent({
@@ -329,7 +379,7 @@ async function main(): Promise<void> {
         agentName,
         playbookName,
         prompt,
-        trigger,
+        trigger: 'manual',
       })
         .then(() => {
           tui?.render();

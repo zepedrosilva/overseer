@@ -128,14 +128,14 @@ describe('PR Stats & Velocity Engine', () => {
     });
 
     const fullText = stripAnsi(lines.join('\n'));
-    expect(fullText).toContain('PR Stats & Leaderboard: Mine (30d trailing)');
+    expect(fullText).toContain('PR Stats & Velocity: Mine (30d trailing)');
     expect(fullText).toContain('MERGED PR VELOCITY');
     expect(fullText).toContain('REVIEW TURNAROUND');
     expect(fullText).toContain('CI PASS RATE');
     expect(fullText).toContain('AVG PR SIZE & DIFF');
     expect(fullText).toContain('DISCUSSION DENSITY');
-    expect(fullText).toContain('[Tab] scope');
-    expect(fullText).toContain('[Esc/p] close');
+    expect(fullText).toContain('[Tab/1-3] switch tab');
+    expect(fullText).toContain('[Esc] close');
   });
 
   it('renders Scope Tab Bar with counts and active indicators', () => {
@@ -143,15 +143,16 @@ describe('PR Stats & Velocity Engine', () => {
       scope: 'mine',
       mineCount: 5,
       teamCount: 14,
+      agentsCount: 2,
       teamMembersCount: 12,
       teamName: 'core-platform',
       width: 100,
     });
 
     const stripped = stripAnsi(tabLine);
-    expect(stripped).toContain('● [1] Mine (5)');
-    expect(stripped).toContain('○ [2] Team: core-platform');
-    expect(stripped).toContain('12 members');
+    expect(stripped).toContain('[1] Mine (5)');
+    expect(stripped).toContain('[2] Team (14)');
+    expect(stripped).toContain('[3] Agents (2)');
   });
 
   it('filters historicalStats.records properly when backfilling', () => {

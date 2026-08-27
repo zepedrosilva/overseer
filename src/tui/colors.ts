@@ -44,6 +44,14 @@ export function rgbColor(hex: string): string {
   return `38;2;${r};${g};${b}m`;
 }
 
+export function rgbBg(hex: string): string {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `48;2;${r};${g};${b}m`;
+}
+
 export function statusColor(status: PrOverallStatus): string {
   switch (status) {
     case 'Ready':

@@ -133,9 +133,20 @@ export async function provisionWorktree(
       // Ignore if hooks write fails
     }
   } else {
-    // Restore push URL if previously disabled
+    // Restore push URL if previously disabled, matching parent repo protocol (SSH vs HTTPS)
+    let pushUrl = `https://github.com/${pr.key.owner}/${pr.key.repo}.git`;
     try {
-      await execFileAsync('git', ['remote', 'set-url', '--push', 'origin', `https://github.com/${pr.key.owner}/${pr.key.repo}.git`], {
+      const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: process.cwd() });
+      const trimmed = stdout.trim();
+      if (trimmed.startsWith('git@') || trimmed.startsWith('ssh://')) {
+        pushUrl = `git@github.com:${pr.key.owner}/${pr.key.repo}.git`;
+      }
+    } catch {
+      // Fallback to https
+    }
+
+    try {
+      await execFileAsync('git', ['remote', 'set-url', '--push', 'origin', pushUrl], {
         cwd: worktreePath,
       });
     } catch {

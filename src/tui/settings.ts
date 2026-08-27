@@ -16,6 +16,7 @@ export interface SettingsModalOptions {
 }
 
 export const SETTINGS_ITEMS = [
+  { id: 'agentsEnabled', label: 'AI Agents & Triage', section: 'EXTENSIONS' },
   { id: 'defaultAgent', label: 'Default AI Agent', section: 'DEFAULTS' },
   { id: 'pollInterval', label: 'Personal Poll Interval', section: 'DEFAULTS' },
   { id: 'filterUserOnly', label: 'Filter Involving @me Only', section: 'DEFAULTS' },
@@ -76,7 +77,12 @@ export function renderSettingsModal(options: SettingsModalOptions): string[] {
 
     let valueStr = '';
 
-    if (item.id === 'defaultAgent') {
+    if (item.id === 'agentsEnabled') {
+      const cur = state.extensions?.agents?.enabled !== false;
+      valueStr = cur
+        ? `\x1B[${rgbColor(colors.green)}< ● Enabled (AI Triage & Sessions) >\x1B[0m`
+        : `\x1B[${rgbColor(colors.fgDim)}< ○ Disabled (Stealth Mode) >\x1B[0m`;
+    } else if (item.id === 'defaultAgent') {
       const cur = state.settings.defaultAgent || 'claude';
       valueStr = `\x1B[${rgbColor(colors.cyan)}< ${cur} >\x1B[0m  \x1B[${rgbColor(colors.fgMuted)}(${availableAgents.join(', ')})\x1B[0m`;
     } else if (item.id === 'pollInterval') {

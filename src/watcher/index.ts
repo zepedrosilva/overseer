@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AppState, AppConfig, RepoHandle, PrState } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { upsertPR, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
+import { upsertPR, updatePRStatus, appendLog, saveState, resolveStateDir, recordHistoricalPr } from '../app/state.js';
 import { runGraphQL, fetchTeamMembers, fetchTeamMemberProfiles, checkRateLimit } from './gh.js';
 import { evaluateAutonomousPolicies } from './autonomous.js';
 import {

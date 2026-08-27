@@ -203,7 +203,7 @@ export function renderDiffModal(options: RenderDiffModalOptions): string[] {
   // 4. Modal Bottom Border with Adaptive Navigation & Actions
   const candidateBadges = [
     '[n/p] file',
-    '[j/k] scroll',
+    '[↑/↓] scroll',
     '[o] open',
     '[m] merge',
     '[a] agent',
