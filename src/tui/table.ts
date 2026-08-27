@@ -1,4 +1,4 @@
-import type { PrState, WorkerHandle, RepoPolicyConfig } from '../app/types.js';
+import type { PrState, WorkerHandle, RepoPolicyConfig, PrOverallStatus } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { formatReviewBadge } from '../watcher/evaluator.js';
 import {
@@ -29,6 +29,29 @@ export interface RenderTableOptions {
 type TableItem =
   | { type: 'header'; owner: string; count: number }
   | { type: 'pr'; pr: PrState; originalIndex: number };
+
+export function formatStatusLabel(status: PrOverallStatus): string {
+  switch (status) {
+    case 'Ready':
+      return 'Ready ';
+    case 'ChangesRequested':
+      return 'ReqChg';
+    case 'CiFailing':
+      return 'CiFail';
+    case 'CiPending':
+      return 'In CI ';
+    case 'Reviewing':
+      return 'InRevw';
+    case 'Draft':
+      return 'Draft ';
+    case 'Merged':
+      return 'Merged';
+    case 'Closed':
+      return 'Closed';
+    default:
+      return ((status as string) || '').slice(0, 6).padEnd(6);
+  }
+}
 
 export function renderTable(options: RenderTableOptions): string[] {
   const { prs, selectedIndex, width, height, scope, currentUser } = options;
@@ -175,13 +198,21 @@ export function renderTable(options: RenderTableOptions): string[] {
     const isDryRunWorker = Boolean(worker && worker.status === 'dry-run');
 
     let sIcon = statusIcon(pr.overallStatus);
-    let sName = pr.overallStatus.slice(0, 6).padEnd(6);
+    let sName = formatStatusLabel(pr.overallStatus);
     let sc = rgbColor(statusColor(pr.overallStatus));
 
     if (isWorkerRunning) {
+      const activeRunningList = Array.from(options.workers?.values() || []).filter((w) => w.status === 'running');
+      const activeIdx = activeRunningList.findIndex(
+        (w) =>
+          w.prKey.owner === pr.key.owner &&
+          w.prKey.repo === pr.key.repo &&
+          w.prKey.number === pr.key.number
+      );
+      const workerIdxStr = activeIdx >= 0 ? `[${activeIdx + 1}]` : `[1]`;
       sIcon = getSpinnerChar(options.spinnerTick);
-      sName = worker!.agentName.slice(0, 6).padEnd(6);
-      sc = rgbColor(colors.yellow);
+      sName = workerIdxStr.padEnd(6);
+      sc = rgbColor(colors.cyan);
     } else if (isDryRunWorker) {
       sIcon = '🟡';
       sName = 'DRY'.padEnd(6);

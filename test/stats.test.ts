@@ -143,7 +143,6 @@ describe('PR Stats & Velocity Engine', () => {
       scope: 'mine',
       mineCount: 5,
       teamCount: 14,
-      agentsCount: 2,
       teamMembersCount: 12,
       teamName: 'core-platform',
       width: 100,
@@ -152,7 +151,7 @@ describe('PR Stats & Velocity Engine', () => {
     const stripped = stripAnsi(tabLine);
     expect(stripped).toContain('[1] Mine (5)');
     expect(stripped).toContain('[2] Team (14)');
-    expect(stripped).toContain('[3] Agents (2)');
+    expect(stripped).toContain('[3] Agents');
   });
 
   it('filters historicalStats.records properly when backfilling', () => {

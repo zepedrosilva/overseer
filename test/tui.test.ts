@@ -8,7 +8,8 @@ import {
   formatTimeAgo,
 } from '../src/tui/layout.js';
 import { filterPRs, renderSearchBar } from '../src/tui/search.js';
-import { renderBanner, renderStatsBar, renderDivider } from '../src/tui/banner.js';
+import { rgbColor } from '../src/tui/colors.js';
+import { renderBanner, renderStatsBar, renderDivider, LOGO_GRADIENT_COLORS, getEyeScanChar } from '../src/tui/banner.js';
 import { renderTable } from '../src/tui/table.js';
 import { renderDetails, renderDetailsModal } from '../src/tui/details.js';
 import { renderSettingsModal } from '../src/tui/settings.js';
@@ -17,11 +18,11 @@ import { renderStatsModal } from '../src/tui/stats.js';
 import { renderHelpModal } from '../src/tui/help.js';
 import { renderDiffModal } from '../src/tui/diff.js';
 import { renderLogsModal } from '../src/tui/logs.js';
-import { renderFooter } from '../src/tui/footer.js';
+import { renderFooter, renderDockedWorkersBar } from '../src/tui/footer.js';
 import { renderAgentModal } from '../src/tui/agentModal.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import { calculateStats } from '../src/stats/index.js';
-import type { PrState } from '../src/app/types.js';
+import type { PrState, WorkerHandle } from '../src/app/types.js';
 
 describe('TUI Components & Engine', () => {
   function createMockPR(number: number, status: PrState['overallStatus'] = 'Ready'): PrState {
@@ -297,9 +298,9 @@ describe('TUI Components & Engine', () => {
       expect(fullText).toContain('#202');
     });
 
-    it('renders animated spinner in CI column when CI check runs are pending', async () => {
-      const { ciIcon, getSpinnerChar } = await import('../src/tui/colors.js');
-      expect(ciIcon('PENDING', 2)).toBe(getSpinnerChar(2));
+    it('renders hourglass icon in CI column and In CI label when CI check runs are pending', async () => {
+      const { ciIcon } = await import('../src/tui/colors.js');
+      expect(ciIcon('PENDING')).toBe('⏳');
 
       const pr = createMockPR(142, 'CiPending');
       pr.ciStatus = 'PENDING';
@@ -308,11 +309,11 @@ describe('TUI Components & Engine', () => {
         selectedIndex: 0,
         width: 100,
         height: 5,
-        spinnerTick: 3,
       });
 
       const rowText = stripAnsi(lines[2]);
-      expect(rowText).toContain(getSpinnerChar(3));
+      expect(rowText).toContain('In CI');
+      expect(rowText).toContain('⏳');
     });
 
     it('renders details modal for selected PR with borders, reviewers roster, and scroll hints', () => {
@@ -649,6 +650,203 @@ describe('TUI Components & Engine', () => {
         });
         testModalGeometry(`AgentModal (${width}w)`, lines, width, 20);
       }
+    });
+  });
+
+  describe('3D Metallic Logo Gradient & Docked Live Worker Bar', () => {
+    it('applies 4-step vertical metallic TrueColor gradient across logo rows', () => {
+      const banner = renderBanner(120, 'v3');
+      expect(banner).toHaveLength(5);
+      // Row 1 uses white highlight color derived from LOGO_GRADIENT_COLORS[0]
+      expect(banner[1]).toContain(rgbColor(LOGO_GRADIENT_COLORS[0]));
+      // Row 4 uses shadow slate color derived from LOGO_GRADIENT_COLORS[3]
+      expect(banner[4]).toContain(rgbColor(LOGO_GRADIENT_COLORS[3]));
+      // Verify all rows strictly track the exported gradient palette
+      for (let i = 0; i < LOGO_GRADIENT_COLORS.length; i++) {
+        expect(banner[i + 1]).toContain(rgbColor(LOGO_GRADIENT_COLORS[i]));
+      }
+    });
+
+    it('renders animated eye radar scanner in stats bar and paces getEyeScanChar at 1.25 cycles/s', () => {
+      expect(getEyeScanChar(0)).toBe('◉');
+      expect(getEyeScanChar(1)).toBe('◉');
+      expect(getEyeScanChar(2)).toBe('◎');
+      expect(getEyeScanChar(3)).toBe('◎');
+      expect(getEyeScanChar(4)).toBe('●');
+      expect(getEyeScanChar(5)).toBe('●');
+      expect(getEyeScanChar(6)).toBe('○');
+      expect(getEyeScanChar(7)).toBe('○');
+      expect(getEyeScanChar(8)).toBe('◉');
+
+      const state = createEmptyState();
+      const statsIdle = renderStatsBar(state, 120, { spinnerTick: 0 });
+      expect(statsIdle).toContain('◉');
+
+      state.isPolling = true;
+      const statsPolling = renderStatsBar(state, 120, { spinnerTick: 2 });
+      expect(statsPolling).toContain('◎');
+    });
+
+    it('renders indexed worker indicator in PR table STATUS column', () => {
+      const pr1 = createMockPR(101, 'Ready');
+      const pr2 = createMockPR(102, 'Ready');
+      const workersMap = new Map<string, WorkerHandle>();
+      workersMap.set('acme-corp/web-frontend#101', {
+        sessionId: 'sess-1',
+        prKey: pr1.key,
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        startedAt: Date.now() - 30000,
+        status: 'running',
+      });
+
+      const tableLines = renderTable({
+        prs: [pr1, pr2],
+        selectedIndex: 0,
+        width: 120,
+        height: 10,
+        scope: 'mine',
+        workers: workersMap,
+        agentsEnabled: true,
+        spinnerTick: 0,
+      });
+
+      const plainTable = tableLines.map(stripAnsi).join('\n');
+      expect(plainTable).toContain('[1]');
+    });
+
+    it('renders docked live worker bar with indexed cards, prompt snippet, timer, and touched files', () => {
+      const prKey: PrState['key'] = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      const worker: WorkerHandle = {
+        sessionId: 'sess-1',
+        prKey,
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        originalPrompt: 'Fix tax balance rounding error in invoice calculation',
+        startedAt: Date.now() - 45000,
+        status: 'running',
+        touchedFiles: ['src/billing/tax.ts', 'test/tax.test.ts'],
+      };
+
+      const barLines = renderDockedWorkersBar({
+        workers: [worker],
+        selectedPrKey: prKey,
+        width: 120,
+        spinnerTick: 0,
+      });
+
+      expect(barLines).toHaveLength(1);
+      const text = stripAnsi(barLines[0]);
+      expect(text).toContain('❯ [1]');
+      expect(text).toContain('[agy]');
+      expect(text).toContain('web-frontend#142');
+      expect(text).toContain('address-comments');
+      expect(text).toContain('Fix tax balance rounding error');
+      expect(text).toMatch(/4[56]s/);
+      expect(text).toContain('⚡ 2 modified');
+    });
+
+    it('validates docked live worker bar line length and geometry across narrow and wide screen widths', () => {
+      const prKey: PrState['key'] = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      const workers: WorkerHandle[] = [
+        {
+          sessionId: 'sess-1',
+          prKey,
+          agentName: 'agy',
+          playbookName: 'address-comments',
+          driver: 'local',
+          mode: 'live',
+          originalPrompt: 'Fix tax balance rounding error in invoice calculation',
+          startedAt: Date.now() - 45000,
+          status: 'running',
+          touchedFiles: ['src/billing/tax.ts', 'test/tax.test.ts'],
+        },
+        {
+          sessionId: 'sess-2',
+          prKey: { owner: 'acme-corp', repo: 'backend-api', number: 55 },
+          agentName: 'claude',
+          playbookName: 'ci-repair',
+          driver: 'local',
+          mode: 'live',
+          startedAt: Date.now() - 12000,
+          status: 'running',
+        },
+        {
+          sessionId: 'sess-3',
+          prKey: { owner: 'acme-corp', repo: 'auth-service', number: 99 },
+          agentName: 'gemini',
+          playbookName: 'review',
+          driver: 'local',
+          mode: 'live',
+          startedAt: Date.now() - 5000,
+          status: 'running',
+        },
+        {
+          sessionId: 'sess-4',
+          prKey: { owner: 'acme-corp', repo: 'mobile-app', number: 12 },
+          agentName: 'pi',
+          playbookName: 'fix-build',
+          driver: 'local',
+          mode: 'live',
+          startedAt: Date.now() - 2000,
+          status: 'running',
+        },
+      ];
+
+      for (const width of [40, 60, 80, 100, 120]) {
+        const safeWidth = Math.max(10, width - 2);
+        const lines = renderDockedWorkersBar({
+          workers,
+          selectedPrKey: prKey,
+          width,
+          spinnerTick: 0,
+        });
+
+        // 3 active worker rows + 1 overflow row (+1 more background agents)
+        expect(lines).toHaveLength(4);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const vLen = visualLength(line);
+          expect(vLen, `docked bar (${width}w) row ${i} visualLength (${vLen}) must strictly equal safeWidth (${safeWidth})`).toBe(safeWidth);
+        }
+      }
+    });
+
+    it('returns empty array from docked worker bar when no workers are running', () => {
+      const barLines = renderDockedWorkersBar({
+        workers: [],
+        width: 120,
+      });
+      expect(barLines).toEqual([]);
+    });
+
+    it('shows 0s for workers started less than 1 second ago', () => {
+      const prKey: PrState['key'] = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      const worker: WorkerHandle = {
+        sessionId: 'sess-1',
+        prKey,
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        startedAt: Date.now(),
+        status: 'running',
+      };
+
+      const barLines = renderDockedWorkersBar({
+        workers: [worker],
+        selectedPrKey: prKey,
+        width: 120,
+        spinnerTick: 0,
+      });
+
+      expect(barLines).toHaveLength(1);
+      const text = stripAnsi(barLines[0]);
+      expect(text).toContain('(0s)');
     });
   });
 });
