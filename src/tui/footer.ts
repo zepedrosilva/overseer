@@ -63,13 +63,13 @@ export function renderDockedWorkersBar(options: DockedWorkersBarOptions): string
     const bgCode = isSelected ? rgbBg(colors.selectedBg) : rgbBg(colors.headerBg);
 
     const prefix = `${pointer}${indexBadge} ${spinnerBadge} ${agentBadge} ${prBadge} ${playbookBadge}${promptSnippet} ${timerBadge}${editsBadge}${endTimer}`;
-    lines.push(`\x1B[${bgCode}${padEndVisual(prefix, safeWidth)}\x1B[0m`);
+    lines.push(`\x1B[${bgCode}${padEndVisual(truncateVisual(prefix, safeWidth), safeWidth)}\x1B[0m`);
   }
 
   if (activeWorkers.length > maxRows) {
     const extraCount = activeWorkers.length - maxRows;
     const extraText = `  \x1B[${rgbColor(colors.fgDim)}(+${extraCount} more background agent${extraCount > 1 ? 's' : ''} running · press Tab/3 for all)\x1B[0m`;
-    lines.push(`\x1B[${rgbBg(colors.headerBg)}${padEndVisual(extraText, safeWidth)}\x1B[0m`);
+    lines.push(`\x1B[${rgbBg(colors.headerBg)}${padEndVisual(truncateVisual(extraText, safeWidth), safeWidth)}\x1B[0m`);
   }
 
   return lines;

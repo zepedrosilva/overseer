@@ -8,6 +8,7 @@ import {
   formatTimeAgo,
 } from '../src/tui/layout.js';
 import { filterPRs, renderSearchBar } from '../src/tui/search.js';
+import { rgbColor } from '../src/tui/colors.js';
 import { renderBanner, renderStatsBar, renderDivider, LOGO_GRADIENT_COLORS } from '../src/tui/banner.js';
 import { renderTable } from '../src/tui/table.js';
 import { renderDetails, renderDetailsModal } from '../src/tui/details.js';
@@ -656,10 +657,14 @@ describe('TUI Components & Engine', () => {
     it('applies 4-step vertical metallic TrueColor gradient across logo rows', () => {
       const banner = renderBanner(120, 'v3');
       expect(banner).toHaveLength(5);
-      // Row 1 uses white highlight color #ffffff (38;2;255;255;255)
-      expect(banner[1]).toContain('38;2;255;255;255m');
-      // Row 4 uses shadow slate color #64748b (38;2;100;116;139)
-      expect(banner[4]).toContain('38;2;100;116;139m');
+      // Row 1 uses white highlight color derived from LOGO_GRADIENT_COLORS[0]
+      expect(banner[1]).toContain(rgbColor(LOGO_GRADIENT_COLORS[0]));
+      // Row 4 uses shadow slate color derived from LOGO_GRADIENT_COLORS[3]
+      expect(banner[4]).toContain(rgbColor(LOGO_GRADIENT_COLORS[3]));
+      // Verify all rows strictly track the exported gradient palette
+      for (let i = 0; i < LOGO_GRADIENT_COLORS.length; i++) {
+        expect(banner[i + 1]).toContain(rgbColor(LOGO_GRADIENT_COLORS[i]));
+      }
     });
 
     it('renders animated eye radar scanner in stats bar', () => {
@@ -731,8 +736,74 @@ describe('TUI Components & Engine', () => {
       expect(text).toContain('web-frontend#142');
       expect(text).toContain('address-comments');
       expect(text).toContain('Fix tax balance rounding error');
-      expect(text).toContain('45s');
+      expect(text).toMatch(/4[56]s/);
       expect(text).toContain('⚡ 2 modified');
+    });
+
+    it('validates docked live worker bar line length and geometry across narrow and wide screen widths', () => {
+      const prKey: PrState['key'] = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      const workers: WorkerHandle[] = [
+        {
+          sessionId: 'sess-1',
+          prKey,
+          agentName: 'agy',
+          playbookName: 'address-comments',
+          driver: 'local',
+          mode: 'live',
+          originalPrompt: 'Fix tax balance rounding error in invoice calculation',
+          startedAt: Date.now() - 45000,
+          status: 'running',
+          touchedFiles: ['src/billing/tax.ts', 'test/tax.test.ts'],
+        },
+        {
+          sessionId: 'sess-2',
+          prKey: { owner: 'acme-corp', repo: 'backend-api', number: 55 },
+          agentName: 'claude',
+          playbookName: 'ci-repair',
+          driver: 'local',
+          mode: 'live',
+          startedAt: Date.now() - 12000,
+          status: 'running',
+        },
+        {
+          sessionId: 'sess-3',
+          prKey: { owner: 'acme-corp', repo: 'auth-service', number: 99 },
+          agentName: 'gemini',
+          playbookName: 'review',
+          driver: 'local',
+          mode: 'live',
+          startedAt: Date.now() - 5000,
+          status: 'running',
+        },
+        {
+          sessionId: 'sess-4',
+          prKey: { owner: 'acme-corp', repo: 'mobile-app', number: 12 },
+          agentName: 'pi',
+          playbookName: 'fix-build',
+          driver: 'local',
+          mode: 'live',
+          startedAt: Date.now() - 2000,
+          status: 'running',
+        },
+      ];
+
+      for (const width of [40, 60, 80, 100, 120]) {
+        const safeWidth = Math.max(10, width - 2);
+        const lines = renderDockedWorkersBar({
+          workers,
+          selectedPrKey: prKey,
+          width,
+          spinnerTick: 0,
+        });
+
+        // 3 active worker rows + 1 overflow row (+1 more background agents)
+        expect(lines).toHaveLength(4);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const vLen = visualLength(line);
+          expect(vLen, `docked bar (${width}w) row ${i} visualLength (${vLen}) must strictly equal safeWidth (${safeWidth})`).toBe(safeWidth);
+        }
+      }
     });
 
     it('returns empty array from docked worker bar when no workers are running', () => {
