@@ -1,10 +1,79 @@
 // ── TUI Footer & Modal Prompt Engine ────────────────────────────────────────
 // Context-sensitive footer actions and interactive prompt modals matching llmfit.
 
-import type { PrState, RepoPolicyMode, ViewScope } from '../app/types.js';
+import type { PrState, RepoPolicyMode, ViewScope, WorkerHandle, PrKey } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
-import { colors, rgbColor } from './colors.js';
-import { padEndVisual } from './layout.js';
+import { colors, rgbColor, rgbBg, getSpinnerChar } from './colors.js';
+import { padEndVisual, truncateVisual } from './layout.js';
+
+export interface DockedWorkersBarOptions {
+  workers: WorkerHandle[];
+  selectedPrKey?: PrKey | null;
+  width: number;
+  spinnerTick?: number;
+}
+
+export function renderDockedWorkersBar(options: DockedWorkersBarOptions): string[] {
+  const { workers, selectedPrKey, width, spinnerTick = 0 } = options;
+  const activeWorkers = workers.filter((w) => w.status === 'running');
+  if (activeWorkers.length === 0) {
+    return [];
+  }
+
+  const safeWidth = Math.max(10, width - 2);
+  const lines: string[] = [];
+  const spinner = getSpinnerChar(spinnerTick);
+  const maxRows = Math.min(3, activeWorkers.length);
+
+  for (let idx = 0; idx < maxRows; idx++) {
+    const w = activeWorkers[idx];
+    const indexNum = idx + 1;
+    const isSelected =
+      Boolean(selectedPrKey &&
+      selectedPrKey.owner === w.prKey.owner &&
+      selectedPrKey.repo === w.prKey.repo &&
+      selectedPrKey.number === w.prKey.number);
+
+    const prStr = `${w.prKey.repo}#${w.prKey.number}`;
+    const elapsedSecs = Math.max(1, Math.round((Date.now() - (w.startedAt || Date.now())) / 1000));
+    const timeStr = elapsedSecs >= 60
+      ? `${Math.floor(elapsedSecs / 60)}m ${elapsedSecs % 60}s`
+      : `${elapsedSecs}s`;
+
+    const pointer = isSelected ? '\x1B[1;36m❯\x1B[0m ' : '  ';
+    const indexBadge = `\x1B[1;36m[${indexNum}]\x1B[0m`;
+    const spinnerBadge = `\x1B[1;32m${spinner}\x1B[0m`;
+    const agentBadge = `\x1B[1;37m🤖 [${w.agentName}]\x1B[0m`;
+    const prBadge = `\x1B[${rgbColor(colors.cyan)}${prStr}\x1B[0m`;
+    const playbookBadge = `\x1B[${rgbColor(colors.fgDim)}· ${w.playbookName || 'task'}\x1B[0m`;
+
+    let promptSnippet = '';
+    if (w.originalPrompt) {
+      const cleanPrompt = w.originalPrompt.replace(/\s+/g, ' ').trim();
+      promptSnippet = `: \x1B[${rgbColor(colors.fg)}"${truncateVisual(cleanPrompt, 35)}"\x1B[0m`;
+    }
+
+    const timerBadge = `\x1B[${rgbColor(colors.fgDim)}(${timeStr}\x1B[0m`;
+    const editsBadge = w.touchedFiles && w.touchedFiles.length > 0
+      ? ` \x1B[1;33m· ⚡ ${w.touchedFiles.length} modified\x1B[0m`
+      : '';
+    const endTimer = `\x1B[${rgbColor(colors.fgDim)})\x1B[0m`;
+
+    // Background tint (#0f172a / headerBg or selectedBg if isSelected)
+    const bgCode = isSelected ? rgbBg(colors.selectedBg) : rgbBg(colors.headerBg);
+
+    const prefix = `${pointer}${indexBadge} ${spinnerBadge} ${agentBadge} ${prBadge} ${playbookBadge}${promptSnippet} ${timerBadge}${editsBadge}${endTimer}`;
+    lines.push(`\x1B[${bgCode}${padEndVisual(prefix, safeWidth)}\x1B[0m`);
+  }
+
+  if (activeWorkers.length > maxRows) {
+    const extraCount = activeWorkers.length - maxRows;
+    const extraText = `  \x1B[${rgbColor(colors.fgDim)}(+${extraCount} more background agent${extraCount > 1 ? 's' : ''} running · press Tab/3 for all)\x1B[0m`;
+    lines.push(`\x1B[${rgbBg(colors.headerBg)}${padEndVisual(extraText, safeWidth)}\x1B[0m`);
+  }
+
+  return lines;
+}
 
 export type FooterMode =
   | 'NORMAL'

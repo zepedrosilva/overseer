@@ -20,7 +20,7 @@ import { renderAgentModal, PLAYBOOK_OPTIONS } from './agentModal.js';
 import { renderAgentsTab, collectPRWorkflowGroups } from './agentsTab.js';
 import { cancelWorker } from '../agents/index.js';
 import { calculateStats, backfillHistoricalStats, backfill30DayStats } from '../stats/index.js';
-import { renderFooter, type FooterMode, type FooterContext } from './footer.js';
+import { renderFooter, renderDockedWorkersBar, type FooterMode, type FooterContext } from './footer.js';
 import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getRepoRoleAgent, getAvailableAgents, saveState, saveSettings } from '../app/state.js';
 import { getPRDiff } from '../watcher/gh.js';
 import { colors, rgbColor } from './colors.js';
@@ -287,8 +287,17 @@ export function createTUI(
 
       const allLines: string[] = [];
 
-      // 1. Monochromatic Large ASCII Banner (blank line on top + logo + version adjacent top-right)
-      const bannerLines = renderBanner(layout.width);
+      const isAgentsEnabled = data.extensions?.agents?.enabled !== false;
+      const activeRunningWorkers = isAgentsEnabled
+        ? Array.from(data.workers?.values() || []).filter((w) => w.status === 'running')
+        : [];
+      const hasRunningAgent = activeRunningWorkers.length > 0;
+
+      // 1. Monochromatic Large ASCII Banner with 3D gradient & version
+      const bannerLines = renderBanner(layout.width, undefined, {
+        spinnerTick,
+        hasRunningAgents: hasRunningAgent,
+      });
       allLines.push(...bannerLines);
 
       // 2. Compact 1-line metadata bar below logo
@@ -297,6 +306,7 @@ export function createTUI(
           apiEnabled: data.extensions?.api?.enabled ?? options?.apiEnabled,
           apiPort: data.extensions?.api?.port ?? options?.apiPort,
           spinnerTick,
+          hasRunningAgents: hasRunningAgent,
         })
       );
 
@@ -333,10 +343,18 @@ export function createTUI(
         return p.scope === 'team' || p.scope === 'both';
       }).length;
 
-      const isAgentsEnabled = data.extensions?.agents?.enabled !== false;
       const agentGroups = isAgentsEnabled ? collectPRWorkflowGroups(data, cwd) : [];
       const agentsCount = agentGroups.length;
-      const hasRunningAgent = isAgentsEnabled && Array.from(data.workers?.values() || []).some((w) => w.status === 'running');
+
+      // Docked Live Workers Bar calculation (Claude Code style)
+      const dockedBarLines = renderDockedWorkersBar({
+        workers: activeRunningWorkers,
+        selectedPrKey: selectedPR ? selectedPR.key : null,
+        width: layout.width,
+        spinnerTick,
+      });
+      const dockedBarHeight = dockedBarLines.length > 0 ? dockedBarLines.length + 1 : 0;
+      const effectiveBodyHeight = Math.max(2, layout.bodyHeight - dockedBarHeight);
 
       allLines.push(renderDivider(layout.width));
       allLines.push(
@@ -361,7 +379,7 @@ export function createTUI(
         const agentTabLines = renderAgentsTab({
           data,
           width: layout.width,
-          height: layout.bodyHeight,
+          height: effectiveBodyHeight,
           selectedPrIndex: agentsSelectedPrIndex,
           selectedSessionIndex: agentsSelectedSessionIndex,
           focusedPane: agentsFocusedPane,
@@ -370,7 +388,7 @@ export function createTUI(
           spinnerTick,
           cwd,
         });
-        for (let i = 0; i < layout.bodyHeight; i++) {
+        for (let i = 0; i < effectiveBodyHeight; i++) {
           allLines.push(agentTabLines[i] || padEndVisual('', layout.width));
         }
       } else {
@@ -378,7 +396,7 @@ export function createTUI(
           prs: filteredPRs,
           selectedIndex: selectedRow,
           width: layout.width,
-          height: layout.bodyHeight,
+          height: effectiveBodyHeight,
           scope: data.viewScope === 'team' ? 'team' : 'mine',
           currentUser: data.currentUser,
           workers: data.workers,
@@ -387,12 +405,17 @@ export function createTUI(
           teamProfiles: data.teamProfiles,
           spinnerTick,
         });
-        for (let i = 0; i < layout.bodyHeight; i++) {
+        for (let i = 0; i < effectiveBodyHeight; i++) {
           allLines.push(tableLines[i] || padEndVisual('', layout.width));
         }
       }
 
-      // 5. Divider & Footer
+      // 5. Docked Worker Bar (if active agents exist) & Footer
+      if (dockedBarLines.length > 0) {
+        allLines.push(renderDivider(layout.width));
+        allLines.push(...dockedBarLines);
+      }
+
       allLines.push(renderDivider(layout.width));
 
       const currentChosenAgent = availableAgents[selectedAgentIndex] || (selectedPR ? getRepoAgent(data, selectedPR.key) : data.settings?.defaultAgent) || 'claude';

@@ -14,14 +14,28 @@ export const BANNER_LINES = [
   ' ╚██████╔╝  ╚████╔╝  ███████╗ ██║  ██╗ ╚════██║ ███████╗ ███████╗ ██║  ██╗',
 ];
 
+// 4-step vertical metallic TrueColor gradient for a 3D embossed look
+export const LOGO_GRADIENT_COLORS = [
+  '#ffffff', // Row 0: Pure crisp white highlight
+  '#cbd5e1', // Row 1: Light metallic slate
+  '#94a3b8', // Row 2: Medium metallic slate
+  '#64748b', // Row 3: Shadow slate
+];
+
+export const EYE_SCAN_FRAMES = ['◉', '◎', '●', '○'];
+
+export function getEyeScanChar(tick: number = 0): string {
+  return EYE_SCAN_FRAMES[Math.abs(tick) % EYE_SCAN_FRAMES.length];
+}
+
 export interface BannerOptions {
   apiEnabled?: boolean;
   apiPort?: number;
   spinnerTick?: number;
+  hasRunningAgents?: boolean;
 }
 
-export function renderBanner(width: number = 120, version?: string): string[] {
-  const whiteCode = '1;37'; // Bold white
+export function renderBanner(width: number = 120, version?: string, options?: BannerOptions): string[] {
   const safeWidth = Math.max(10, width - 2);
   const lines: string[] = [];
 
@@ -38,7 +52,8 @@ export function renderBanner(width: number = 120, version?: string): string[] {
 
   for (let i = 0; i < BANNER_LINES.length; i++) {
     const raw = BANNER_LINES[i];
-    const coloredLogo = `\x1B[${whiteCode}m${raw}\x1B[0m`;
+    const colorHex = LOGO_GRADIENT_COLORS[i] || '#ffffff';
+    const coloredLogo = `\x1B[${rgbColor(colorHex)}${raw}\x1B[0m`;
 
     if (i === 0) {
       // Position version badge directly adjacent to top-right of logo (pulled 1 char closer)
@@ -104,9 +119,17 @@ export function renderStatsBar(
     candidateParts.push(`\x1B[${rgbColor(colors.yellow)}[DRY-RUN]\x1B[0m`);
   }
 
+  const hasRunningAgents =
+    options?.hasRunningAgents ??
+    Array.from(data.workers?.values() || []).some((w) => w.status === 'running');
+
+  const eyeIcon = data.isPolling || hasRunningAgents
+    ? `\x1B[1;36m${getEyeScanChar(options?.spinnerTick || 0)}\x1B[0m `
+    : `\x1B[${rgbColor(colors.fgDim)}◉\x1B[0m `;
+
   const separator = '  ';
   const visibleParts: string[] = [];
-  let usedLen = 4; // 2 leading + 2 trailing spaces
+  let usedLen = 6; // leading spaces + eye icon
 
   for (const part of candidateParts) {
     const partLen = visualLength(part) + 2; // part visual length + 2 spaces separator
@@ -116,7 +139,7 @@ export function renderStatsBar(
     }
   }
 
-  const content = `  ${visibleParts.join(separator)}`;
+  const content = `  ${eyeIcon}${visibleParts.join(separator)}`;
   return padEndVisual(content, safeWidth);
 }
 

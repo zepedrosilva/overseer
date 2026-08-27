@@ -179,8 +179,17 @@ export function renderTable(options: RenderTableOptions): string[] {
     let sc = rgbColor(statusColor(pr.overallStatus));
 
     if (isWorkerRunning) {
+      const activeRunningList = Array.from(options.workers?.values() || []).filter((w) => w.status === 'running');
+      const activeIdx = activeRunningList.findIndex(
+        (w) =>
+          w.prKey.owner === pr.key.owner &&
+          w.prKey.repo === pr.key.repo &&
+          w.prKey.number === pr.key.number
+      );
+      const workerIdxStr = activeIdx >= 0 ? `[${activeIdx + 1}]` : '';
       sIcon = getSpinnerChar(options.spinnerTick);
-      sName = worker!.agentName.slice(0, 6).padEnd(6);
+      const agentShort = worker!.agentName.slice(0, 3);
+      sName = workerIdxStr ? `${workerIdxStr}${agentShort}`.slice(0, 6).padEnd(6) : worker!.agentName.slice(0, 6).padEnd(6);
       sc = rgbColor(colors.yellow);
     } else if (isDryRunWorker) {
       sIcon = '🟡';

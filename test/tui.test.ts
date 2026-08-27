@@ -8,7 +8,7 @@ import {
   formatTimeAgo,
 } from '../src/tui/layout.js';
 import { filterPRs, renderSearchBar } from '../src/tui/search.js';
-import { renderBanner, renderStatsBar, renderDivider } from '../src/tui/banner.js';
+import { renderBanner, renderStatsBar, renderDivider, LOGO_GRADIENT_COLORS } from '../src/tui/banner.js';
 import { renderTable } from '../src/tui/table.js';
 import { renderDetails, renderDetailsModal } from '../src/tui/details.js';
 import { renderSettingsModal } from '../src/tui/settings.js';
@@ -17,11 +17,11 @@ import { renderStatsModal } from '../src/tui/stats.js';
 import { renderHelpModal } from '../src/tui/help.js';
 import { renderDiffModal } from '../src/tui/diff.js';
 import { renderLogsModal } from '../src/tui/logs.js';
-import { renderFooter } from '../src/tui/footer.js';
+import { renderFooter, renderDockedWorkersBar } from '../src/tui/footer.js';
 import { renderAgentModal } from '../src/tui/agentModal.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import { calculateStats } from '../src/stats/index.js';
-import type { PrState } from '../src/app/types.js';
+import type { PrState, WorkerHandle } from '../src/app/types.js';
 
 describe('TUI Components & Engine', () => {
   function createMockPR(number: number, status: PrState['overallStatus'] = 'Ready'): PrState {
@@ -649,6 +649,98 @@ describe('TUI Components & Engine', () => {
         });
         testModalGeometry(`AgentModal (${width}w)`, lines, width, 20);
       }
+    });
+  });
+
+  describe('3D Metallic Logo Gradient & Docked Live Worker Bar', () => {
+    it('applies 4-step vertical metallic TrueColor gradient across logo rows', () => {
+      const banner = renderBanner(120, 'v3');
+      expect(banner).toHaveLength(5);
+      // Row 1 uses white highlight color #ffffff (38;2;255;255;255)
+      expect(banner[1]).toContain('38;2;255;255;255m');
+      // Row 4 uses shadow slate color #64748b (38;2;100;116;139)
+      expect(banner[4]).toContain('38;2;100;116;139m');
+    });
+
+    it('renders animated eye radar scanner in stats bar', () => {
+      const state = createEmptyState();
+      const statsIdle = renderStatsBar(state, 120, { spinnerTick: 0 });
+      expect(statsIdle).toContain('◉');
+
+      state.isPolling = true;
+      const statsPolling = renderStatsBar(state, 120, { spinnerTick: 1 });
+      expect(statsPolling).toContain('◎');
+    });
+
+    it('renders indexed worker indicator in PR table STATUS column', () => {
+      const pr1 = createMockPR(101, 'Ready');
+      const pr2 = createMockPR(102, 'Ready');
+      const workersMap = new Map<string, WorkerHandle>();
+      workersMap.set('acme-corp/web-frontend#101', {
+        sessionId: 'sess-1',
+        prKey: pr1.key,
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        startedAt: Date.now() - 30000,
+        status: 'running',
+      });
+
+      const tableLines = renderTable({
+        prs: [pr1, pr2],
+        selectedIndex: 0,
+        width: 120,
+        height: 10,
+        scope: 'mine',
+        workers: workersMap,
+        agentsEnabled: true,
+        spinnerTick: 0,
+      });
+
+      const plainTable = tableLines.map(stripAnsi).join('\n');
+      expect(plainTable).toContain('[1]agy');
+    });
+
+    it('renders docked live worker bar with indexed cards, prompt snippet, timer, and touched files', () => {
+      const prKey: PrState['key'] = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      const worker: WorkerHandle = {
+        sessionId: 'sess-1',
+        prKey,
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        originalPrompt: 'Fix tax balance rounding error in invoice calculation',
+        startedAt: Date.now() - 45000,
+        status: 'running',
+        touchedFiles: ['src/billing/tax.ts', 'test/tax.test.ts'],
+      };
+
+      const barLines = renderDockedWorkersBar({
+        workers: [worker],
+        selectedPrKey: prKey,
+        width: 120,
+        spinnerTick: 0,
+      });
+
+      expect(barLines).toHaveLength(1);
+      const text = stripAnsi(barLines[0]);
+      expect(text).toContain('❯ [1]');
+      expect(text).toContain('[agy]');
+      expect(text).toContain('web-frontend#142');
+      expect(text).toContain('address-comments');
+      expect(text).toContain('Fix tax balance rounding error');
+      expect(text).toContain('45s');
+      expect(text).toContain('⚡ 2 modified');
+    });
+
+    it('returns empty array from docked worker bar when no workers are running', () => {
+      const barLines = renderDockedWorkersBar({
+        workers: [],
+        width: 120,
+      });
+      expect(barLines).toEqual([]);
     });
   });
 });
