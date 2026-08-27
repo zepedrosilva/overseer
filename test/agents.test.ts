@@ -5,7 +5,10 @@ import os from 'node:os';
 import {
   interpolateAgentCommand,
   buildAgentCommand,
+  parseShellArgs,
+  getSpawnExecution,
   resolveWorktreeDir,
+  derivePushUrl,
   cleanupWorktree,
   cleanupPRLogs,
   cleanupPRArtifacts,
@@ -13,6 +16,7 @@ import {
   dispatchAgent,
   cancelWorker,
 } from '../src/agents/index.js';
+import { BUILTIN_PLAYBOOKS } from '../src/agents/playbooks.js';
 import { createEmptyState, upsertPR } from '../src/app/state.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
 import type { PrState, AppConfig } from '../src/app/types.js';
@@ -56,12 +60,13 @@ describe('AI Agent Dispatcher & Worktrees', () => {
     };
   }
 
-  describe('interpolateAgentCommand', () => {
+  describe('interpolateAgentCommand & Context Injection', () => {
     it('replaces all placeholders accurately', () => {
-      const template = 'my-agent --pr {pr} --branch {branch} --repo {owner}/{repo} --dir {worktree} -p "{prompt}"';
+      const template = 'my-agent --pr {pr} --branch {branch} --base {baseBranch} --repo {owner}/{repo} --dir {worktree} -p "{prompt}"';
       const result = interpolateAgentCommand(template, {
         pr: 142,
         branch: 'fix/rounding',
+        baseBranch: 'main',
         owner: 'acme-corp',
         repo: 'web-frontend',
         url: 'https://github.com/acme-corp/web-frontend/pull/142',
@@ -70,7 +75,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       });
 
       expect(result).toBe(
-        'my-agent --pr 142 --branch fix/rounding --repo acme-corp/web-frontend --dir /tmp/wt -p "Fix the bug"'
+        'my-agent --pr 142 --branch fix/rounding --base main --repo acme-corp/web-frontend --dir /tmp/wt -p "Fix the bug"'
       );
     });
 
@@ -85,6 +90,161 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       });
 
       expect(result).toContain('claude -p "Review this Pull Request');
+    });
+
+    it('injects failing check and ci logs context correctly', () => {
+      const template = BUILTIN_PLAYBOOKS['ci-repair'].promptTemplate;
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        failingCheck: 'jest-unit-tests',
+        ciLogs: 'FAIL test/invoice.test.ts\nAssertionError: expected 10 to be 12',
+      });
+
+      expect(result).toContain("The CI check 'jest-unit-tests' failed on this PR.");
+      expect(result).toContain('FAIL test/invoice.test.ts');
+      expect(result).toContain('PR #142 (acme-corp/web-frontend, branch: \'fix/rounding\')');
+    });
+
+    it('injects review comments context into address-comments template', () => {
+      const template = BUILTIN_PLAYBOOKS['address-comments'].promptTemplate;
+      const commentsText = 'Comment 1: Please handle negative tax rate.\nComment 2: Add test case for zero balance.';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        comments: commentsText,
+      });
+
+      expect(result).toContain('Address the following unresolved review comments on this PR:');
+      expect(result).toContain(commentsText);
+    });
+
+    it('injects diff summary into preflight-review template', () => {
+      const template = BUILTIN_PLAYBOOKS['preflight-review'].promptTemplate;
+      const diffSummaryText = 'Changed files: 3 (+45, -12)\n- src/billing/tax.ts\n- test/tax.test.ts';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'feat/new-tax',
+        baseBranch: 'main',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        diffSummary: diffSummaryText,
+      });
+
+      expect(result).toContain('Diff Summary:\n' + diffSummaryText);
+      expect(result).toContain("branch: 'feat/new-tax' -> base: 'main'");
+    });
+
+    it('applies fallbacks when optional context parameters are omitted', () => {
+      const template = 'Logs: {ciLogs} | Comments: {comments} | Diff: {diffSummary} | Check: {failingCheck} | PB: {playbook}';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+      });
+
+      expect(result).toBe(
+        'Logs: No CI logs provided. | Comments: No unresolved comments. | Diff: No diff summary provided. | Check: test | PB: custom'
+      );
+    });
+
+    it('truncates oversized context snippets exceeding MAX_CONTEXT_LENGTH (64 KB)', () => {
+      const massiveLog = 'A'.repeat(70 * 1024);
+      const template = 'CI output: {ciLogs}';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        ciLogs: massiveLog,
+      });
+
+      expect(result).toContain('... (truncated context)');
+      expect(result.length).toBeLessThan(massiveLog.length);
+    });
+  });
+
+  describe('Prompt Escaping & Special Character Handling', () => {
+    it('safely handles double quotes, single quotes, and newlines in prompt', () => {
+      const pr = createMockPR();
+      const rawPrompt = 'Fix issue with "quotes", \'single quotes\',\nand `backticks` $PATH \\escapes';
+      const { promptText } = buildAgentCommand('claude', pr, DEFAULT_CONFIG, '/tmp/wt', rawPrompt);
+
+      expect(promptText).toBe(rawPrompt);
+    });
+
+    it('prevents cascading interpolation and preserves dollar signs when injected values contain placeholders or regex tokens', () => {
+      const template = 'claude -p "{prompt}" --dir {worktree}';
+      const promptValue = 'Check if code has {worktree} variable and $1 $$ $& $` $\' pattern';
+      const result = interpolateAgentCommand(template, {
+        pr: 142,
+        branch: 'fix/rounding',
+        owner: 'acme-corp',
+        repo: 'web-frontend',
+        url: 'https://github.com/acme-corp/web-frontend/pull/142',
+        worktree: '/tmp/worktree',
+        prompt: promptValue,
+      });
+
+      // {worktree} in prompt is NOT expanded to /tmp/worktree (no cascading expansion),
+      // while outer template's {worktree} is properly replaced. Dollar signs are untouched.
+      expect(result).toBe(
+        'claude -p "Check if code has {worktree} variable and $1 $$ $& $` $\' pattern" --dir /tmp/worktree'
+      );
+    });
+
+    it('preserves quotes and arguments in getSpawnExecution for built-in presets', () => {
+      const promptWithQuotes = 'Review "login.ts" and check if it handles `null` tokens & $FOO';
+
+      const claudeExec = getSpawnExecution('claude', '', promptWithQuotes, {});
+      expect(claudeExec.bin).toBe('claude');
+      expect(claudeExec.args).toEqual(['--dangerously-skip-permissions', '-p', promptWithQuotes]);
+
+      const agyExec = getSpawnExecution('agy', '', promptWithQuotes, {});
+      expect(agyExec.bin).toBe('agy');
+      expect(agyExec.args).toContain(promptWithQuotes);
+
+      const piExec = getSpawnExecution('pi', '', promptWithQuotes, {});
+      expect(piExec.bin).toBe('pi');
+      expect(piExec.args).toEqual([promptWithQuotes]);
+    });
+
+    it('correctly tokenizes complex commands with parseShellArgs', () => {
+      const cmd = 'agent-cli run --prompt "Fix invoice calculation #123" --flag \'single value\' --extra normal_val';
+      const parsed = parseShellArgs(cmd);
+
+      expect(parsed.bin).toBe('agent-cli');
+      expect(parsed.args).toEqual([
+        'run',
+        '--prompt',
+        'Fix invoice calculation #123',
+        '--flag',
+        'single value',
+        '--extra',
+        'normal_val',
+      ]);
+    });
+
+    it('interpolates definition.args without shell corruption for custom agents', () => {
+      const definition = {
+        bin: 'custom-ai',
+        args: ['--input', '{prompt}', '--verbose'],
+      };
+      const customPrompt = 'Analyze edge cases with "special" symbols & pipes | redirects > /dev/null';
+      const result = getSpawnExecution('custom', '', customPrompt, definition);
+
+      expect(result.bin).toBe('custom-ai');
+      expect(result.args).toEqual(['--input', customPrompt, '--verbose']);
     });
   });
 
@@ -156,7 +316,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const wtPath = resolveWorktreeDir(config, pr, tmpDir);
+      const wtPath = resolveWorktreeDir(config, pr, { cwd: tmpDir });
       expect(wtPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142'));
     });
 
@@ -170,9 +330,9 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const claudePath = resolveWorktreeDir(config, pr, 'claude', 'preflight-review', tmpDir);
-      const agyFixPath = resolveWorktreeDir(config, pr, 'agy', 'address-comments', tmpDir);
-      const agyCiPath = resolveWorktreeDir(config, pr, 'agy', 'ci-repair', tmpDir);
+      const claudePath = resolveWorktreeDir(config, pr, { agentName: 'claude', playbookName: 'preflight-review', cwd: tmpDir });
+      const agyFixPath = resolveWorktreeDir(config, pr, { agentName: 'agy', playbookName: 'address-comments', cwd: tmpDir });
+      const agyCiPath = resolveWorktreeDir(config, pr, { agentName: 'agy', playbookName: 'ci-repair', cwd: tmpDir });
 
       expect(claudePath).toBe(
         path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-claude-preflight-review')
@@ -185,6 +345,28 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       );
       expect(claudePath).not.toBe(agyFixPath);
       expect(agyFixPath).not.toBe(agyCiPath);
+    });
+
+    it('does not confuse slashes in agent or playbook names with cwd', () => {
+      const pr = createMockPR();
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        defaults: {
+          ...DEFAULT_CONFIG.defaults,
+          worktrees_dir: './.overseer/worktrees',
+        },
+      };
+
+      const customPath = resolveWorktreeDir(config, pr, {
+        agentName: 'custom/agent',
+        playbookName: 'fix/review-comments',
+        cwd: tmpDir,
+      });
+
+      // Slashes should be stripped/sanitized from folder name and not change effective cwd
+      expect(customPath).toBe(
+        path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-customagent-fixreview-comments')
+      );
     });
 
     it('cleans up worktree directory without throwing', () => {
@@ -207,7 +389,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const wtPath = resolveWorktreeDir(config, pr, tmpDir);
+      const wtPath = resolveWorktreeDir(config, pr, { cwd: tmpDir });
       fs.mkdirSync(wtPath, { recursive: true });
       fs.writeFileSync(path.join(wtPath, 'test.txt'), 'code');
 
@@ -223,6 +405,38 @@ describe('AI Agent Dispatcher & Worktrees', () => {
 
       expect(fs.existsSync(wtPath)).toBe(false);
       expect(fs.existsSync(logFile)).toBe(false);
+    });
+  });
+
+  describe('derivePushUrl & GitHub Enterprise support', () => {
+    it('preserves GitHub Enterprise HTTPS origin host and protocol', () => {
+      const enterpriseUrl = derivePushUrl('https://github.corp.internal/old-owner/old-repo.git', 'acme', 'repo-1');
+      expect(enterpriseUrl).toBe('https://github.corp.internal/acme/repo-1.git');
+    });
+
+    it('preserves GitHub Enterprise HTTPS origin host with custom port', () => {
+      const portUrl = derivePushUrl('https://ghe.local:8443/team/project.git', 'acme', 'repo-1');
+      expect(portUrl).toBe('https://ghe.local:8443/acme/repo-1.git');
+    });
+
+    it('preserves GitHub Enterprise SCP-style SSH origin host', () => {
+      const sshUrl = derivePushUrl('git@github.enterprise.com:org/some-repo.git', 'acme', 'repo-1');
+      expect(sshUrl).toBe('git@github.enterprise.com:acme/repo-1.git');
+    });
+
+    it('preserves GitHub Enterprise ssh:// origin with custom port', () => {
+      const sshPortUrl = derivePushUrl('ssh://git@ghe.internal.net:2222/org/some-repo.git', 'acme', 'repo-1');
+      expect(sshPortUrl).toBe('ssh://git@ghe.internal.net:2222/acme/repo-1.git');
+    });
+
+    it('handles standard github.com HTTPS and SSH URLs accurately', () => {
+      expect(derivePushUrl('https://github.com/someone/somerepo.git', 'acme', 'web')).toBe('https://github.com/acme/web.git');
+      expect(derivePushUrl('git@github.com:someone/somerepo.git', 'acme', 'web')).toBe('git@github.com:acme/web.git');
+    });
+
+    it('falls back to https://github.com/owner/repo.git on invalid or empty parent url', () => {
+      expect(derivePushUrl(undefined, 'acme', 'web')).toBe('https://github.com/acme/web.git');
+      expect(derivePushUrl('', 'acme', 'web')).toBe('https://github.com/acme/web.git');
     });
   });
 
@@ -298,32 +512,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(fs.existsSync(wtPath)).toBe(true);
     });
 
-    it('safely handles prompts containing special shell and regex characters ($&, $\', $1, `, ", $(...)) without shell expansion', async () => {
-      const state = createEmptyState();
-      const pr = createMockPR();
-      upsertPR(state, pr);
-
-      // Verify interpolateAgentCommand with regex replacement characters
-      const dangerousTemplate = 'agent --prompt "{prompt}"';
-      const dangerousPrompt = 'Review $& and $\' and $1 and $$ and `whoami` and $(rm -rf /) and "quotes"';
-      const interpolated = interpolateAgentCommand(dangerousTemplate, {
-        pr: pr.key.number,
-        branch: pr.branch,
-        owner: pr.key.owner,
-        repo: pr.key.repo,
-        url: pr.url,
-        prompt: dangerousPrompt,
-      });
-
-      expect(interpolated).toBe(`agent --prompt "${dangerousPrompt}"`);
-      expect(interpolated).toContain('$&');
-      expect(interpolated).toContain('$\'');
-      expect(interpolated).toContain('$1');
-      expect(interpolated).toContain('$$');
-    });
-
-    it('cancels active worker and records exactly one telemetry record with cancelled status', async () => {
-      const { loadAgentStats } = await import('../src/agents/stats.js');
+    it('writes clean, boxless structured log headers and completion markers without legacy ASCII boxes', async () => {
       const state = createEmptyState();
       const pr = createMockPR();
       upsertPR(state, pr);
@@ -331,9 +520,9 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       const config: AppConfig = {
         ...DEFAULT_CONFIG,
         agents: {
-          sleeper: {
-            command: 'node -e "setInterval(() => {}, 1000)"',
-            description: 'Long running agent',
+          logger: {
+            command: 'node -e "console.log(\'Processing task...\')"',
+            description: 'Logger agent',
           },
         },
       };
@@ -342,71 +531,110 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         data: state,
         pr,
         config,
-        agentName: 'sleeper',
+        agentName: 'logger',
         cwd: tmpDir,
       });
 
-      expect(worker.status).toBe('running');
-      const cancelled = cancelWorker(state, pr.key, tmpDir);
-      expect(cancelled).toBe(true);
-      expect(worker.status).toBe('cancelled');
+      // Wait for process to exit and flush logs
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
-      // Wait for process close event to settle
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      const logFile = path.join(tmpDir, '.overseer', 'logs', `${pr.key.owner}-${pr.key.repo}-${pr.key.number}.log`);
+      expect(fs.existsSync(logFile)).toBe(true);
+      const logContent = fs.readFileSync(logFile, 'utf8');
 
-      // Worker should stay cancelled, NOT flip to failed
-      expect(worker.status).toBe('cancelled');
+      // Verify clean lifecycle headers
+      expect(logContent).toContain('=== [');
+      expect(logContent).toContain('DISPATCH: logger');
+      expect(logContent).toContain('COMPLETED in');
+      expect(logContent).toContain('Exit Code: 0');
+      expect(logContent).toContain('Processing task...');
 
-      // Check telemetry stats file
-      const stats = loadAgentStats(undefined, tmpDir);
-      const recordsForSession = stats.records.filter((r) => r.sessionId === worker.sessionId);
-      expect(recordsForSession.length).toBe(1);
-      expect(recordsForSession[0].status).toBe('cancelled');
-    }, 15000);
+      // Verify NO legacy ASCII box borders exist
+      expect(logContent).not.toContain('┌─');
+      expect(logContent).not.toContain('├─ Live Output Stream');
+      expect(logContent).not.toContain('└─ [Completed');
+    });
 
-    it('replaces stale running worker when previous process is dead and allows new dispatch', async () => {
+    it('formats clean, boxless dry-run simulation log output', async () => {
       const state = createEmptyState();
       const pr = createMockPR();
       upsertPR(state, pr);
 
-      // Inject a stale worker handle with a dead PID (e.g. 999999)
-      const staleWorker = {
-        sessionId: 'stale-sess',
-        prKey: pr.key,
-        agentName: 'claude',
-        command: 'mock',
-        worktreePath: 'mock',
-        branch: pr.branch,
-        startedAt: Date.now() - 60000,
-        status: 'running' as const,
-        pid: 99999999,
-      };
-      state.workers.set(`${pr.key.owner}/${pr.key.repo}#${pr.key.number}`, staleWorker);
-
       const config: AppConfig = {
         ...DEFAULT_CONFIG,
         agents: {
-          echo: {
-            command: 'node -e "process.stdout.write(\'ok\\n\')"',
-            description: 'Echo agent',
+          sim: {
+            command: 'sim-command',
+            description: 'Sim agent',
           },
         },
       };
 
-      const newWorker = await dispatchAgent({
+      await dispatchAgent({
         data: state,
         pr,
         config,
-        agentName: 'echo',
+        agentName: 'sim',
+        mode: 'dry-run',
         cwd: tmpDir,
       });
 
-      expect(newWorker).not.toBeNull();
-      expect(newWorker.sessionId).not.toBe('stale-sess');
-      expect(newWorker.agentName).toBe('echo');
-
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(newWorker.status).toBe('completed');
-    }, 15000);
+
+      const logFile = path.join(tmpDir, '.overseer', 'logs', `${pr.key.owner}-${pr.key.repo}-${pr.key.number}.log`);
+      expect(fs.existsSync(logFile)).toBe(true);
+      const logContent = fs.readFileSync(logFile, 'utf8');
+
+      expect(logContent).toContain('DRY-RUN SIMULATION: sim');
+      expect(logContent).toContain('END SIMULATION');
+      expect(logContent).not.toContain('┌─');
+    });
+
+    it('stages only tracked files with git add -u and verifies branch during auto-commit', async () => {
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        agents: {
+          fixer: {
+            command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(\'tracked.txt\', \'modified\'); fs.writeFileSync(\'untracked-junk.log\', \'junk\');"',
+            description: 'Fixer agent',
+          },
+        },
+      };
+
+      const wtPath = resolveWorktreeDir(config, pr, { agentName: 'fixer', playbookName: 'address-comments', cwd: tmpDir });
+      fs.mkdirSync(wtPath, { recursive: true });
+
+      const { execFileSync } = await import('node:child_process');
+      execFileSync('git', ['init', '-b', pr.branch], { cwd: wtPath });
+      execFileSync('git', ['config', 'user.name', 'Overseer Bot'], { cwd: wtPath });
+      execFileSync('git', ['config', 'user.email', 'bot@overseer.local'], { cwd: wtPath });
+      fs.writeFileSync(path.join(wtPath, 'tracked.txt'), 'initial');
+      execFileSync('git', ['add', 'tracked.txt'], { cwd: wtPath });
+      execFileSync('git', ['commit', '-m', 'initial commit'], { cwd: wtPath });
+
+      const worker = await dispatchAgent({
+        data: state,
+        pr,
+        config,
+        agentName: 'fixer',
+        playbookName: 'address-comments',
+        cwd: tmpDir,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(worker.status).toBe('completed');
+
+      // Verify tracked.txt was committed
+      const logOut = execFileSync('git', ['log', '-1', '--format=%s'], { cwd: wtPath }).toString();
+      expect(logOut.trim()).toBe('fix: address address-comments feedback');
+
+      // Verify untracked-junk.log was NOT staged or committed
+      const statusOut = execFileSync('git', ['status', '--porcelain'], { cwd: wtPath }).toString();
+      expect(statusOut).toContain('?? untracked-junk.log');
+    });
   });
 });

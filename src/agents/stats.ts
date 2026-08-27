@@ -10,6 +10,7 @@ import type {
   AgentAggregatedStats,
   RepoPolicyMode,
 } from '../app/types.js';
+import { prKeyToString } from '../app/types.js';
 
 export const AGENT_STATS_FILE_NAME = 'agent-stats.json';
 export const MAX_AGENT_EXECUTION_RECORDS = 200;

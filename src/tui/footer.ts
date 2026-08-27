@@ -1,7 +1,7 @@
 // ── TUI Footer & Modal Prompt Engine ────────────────────────────────────────
 // Context-sensitive footer actions and interactive prompt modals matching llmfit.
 
-import type { PrState, RepoPolicyMode } from '../app/types.js';
+import type { PrState, RepoPolicyMode, ViewScope } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { colors, rgbColor } from './colors.js';
 import { padEndVisual } from './layout.js';
@@ -11,7 +11,6 @@ export type FooterMode =
   | 'SEARCH'
   | 'CONFIRM_MERGE'
   | 'CONFIRM_CLOSE'
-  | 'CONFIRM_LIVE_MODE'
   | 'COMMENT_INPUT'
   | 'AGENT_SELECT'
   | 'PLAYBOOK_SELECT'
@@ -21,6 +20,7 @@ export interface FooterContext {
   mode: FooterMode;
   selectedPR: PrState | null;
   inputBuffer: string;
+  scope?: ViewScope;
   selectedAgent?: string;
   availableAgents?: string[];
   selectedPlaybookIndex?: number;
@@ -34,6 +34,7 @@ export function renderFooter(context: FooterContext, width: number): string {
     mode,
     selectedPR,
     inputBuffer,
+    scope,
     selectedAgent,
     availableAgents,
     selectedPlaybookIndex = 0,
@@ -57,12 +58,6 @@ export function renderFooter(context: FooterContext, width: number): string {
   if (mode === 'CONFIRM_CLOSE') {
     const key = selectedPR ? prKeyToString(selectedPR.key) : '';
     const text = `  \x1B[${rgbColor(colors.red)}! Close Pull Request ${key}? (y/n):\x1B[0m `;
-    return padEndVisual(text, safeWidth);
-  }
-
-  if (mode === 'CONFIRM_LIVE_MODE') {
-    const repo = selectedPR ? `${selectedPR.key.owner}/${selectedPR.key.repo}` : 'this repository';
-    const text = `  \x1B[${rgbColor(colors.red)}⚠️  Enable LIVE autonomous actions for ${repo}? Agents will commit/comment automatically! (y/n):\x1B[0m `;
     return padEndVisual(text, safeWidth);
   }
 
@@ -123,13 +118,23 @@ export function renderFooter(context: FooterContext, width: number): string {
   }
 
   // Normal mode: minimal core actions + [?] all actions
-  const candidateKeys = [
-    { key: 'Enter', label: 'details' },
-    { key: 'Tab', label: 'scope' },
-    { key: 'p', label: 'stats' },
-    { key: '?', label: 'all actions' },
-    { key: 'q', label: 'quit' },
-  ];
+  const candidateKeys = scope === 'agents'
+    ? [
+        { key: '↑/↓', label: 'navigate' },
+        { key: '←/→', label: 'pane' },
+        { key: 'a', label: 'dispatch' },
+        { key: 'c', label: 'cancel' },
+        { key: 'Tab', label: 'scope' },
+        { key: 'q', label: 'quit' },
+      ]
+    : [
+        { key: '↑/↓', label: 'navigate' },
+        { key: 'Enter', label: 'details' },
+        { key: 'Tab', label: 'scope' },
+        { key: 'p', label: 'stats' },
+        { key: '?', label: 'all actions' },
+        { key: 'q', label: 'quit' },
+      ];
 
   const visibleBadges: string[] = [];
   let usedWidth = 4; // 2 leading + 2 trailing spaces

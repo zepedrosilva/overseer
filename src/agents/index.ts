@@ -23,12 +23,14 @@ import { getAgentDefinition } from '../config.js';
 import { appendLog, setWorker, saveState, getRepoAgent, getRepoMode, loadAgentsConfig } from '../app/state.js';
 import {
   resolveWorktreeDir,
+  derivePushUrl,
   provisionWorktree,
   cleanupWorktree,
   resolveLogPath,
   cleanupPRLogs,
   cleanupPRArtifacts,
 } from './worktree.js';
+import type { ResolveWorktreeOptions, ProvisionWorktreeOptions } from './worktree.js';
 import { DEFAULT_AGENT_PROMPT } from './presets.js';
 import { getPlaybookDefinition } from './playbooks.js';
 import { recordAgentExecution } from './stats.js';
@@ -265,6 +267,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     options.mode === 'dry-run' ||
     (options.mode === undefined && repoMode === 'dry-run')
   );
+  const effectiveMode = isDryRun ? 'dry-run' : 'live';
 
   // 1. Resolve Playbook & Injected Context
   const agentsConfig = loadAgentsConfig(cwd);
@@ -304,7 +307,11 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   }
 
   const basePrompt = options.prompt || playbookDef.promptTemplate;
-  const worktreePath = resolveWorktreeDir(config, pr, agentName, playbookName, cwd);
+  const worktreePath = resolveWorktreeDir(config, pr, {
+    agentName,
+    playbookName,
+    cwd,
+  });
 
   const { command, definition, promptText } = buildAgentCommand(
     agentName,
@@ -350,13 +357,12 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     appendLog(data, pr.key, `[DRY-RUN] Command: ${command}`);
     if (logStream) {
       logStream.write(
-        `┌─ 🤖 [SIMULATION] ${agentName} · ${playbookName} · 🟡 DRY-RUN ────────────────────────\n` +
-          `│ Time:      ${startTimeIso}\n` +
-          `│ PR:        ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
-          `│ Playbook:  ${playbookName}\n` +
-          `├─ Planned Prompt & Context ─────────────────────────────────────────────────────────────\n` +
+        `=== [${startTimeIso}] DRY-RUN SIMULATION: ${agentName} · ${playbookName} · 🟡 DRY-RUN ===\n` +
+          `PR:       ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
+          `Playbook: ${playbookName}\n` +
+          `--------------------------------------------------------------------------------\n` +
           `${promptText}\n\n` +
-          `└─ [End Simulation: ${new Date().toISOString()}] ─────────────────────────────────────────\n\n`
+          `=== [${new Date().toISOString()}] END SIMULATION ===\n\n`
       );
       try {
         logStream.end();
@@ -546,11 +552,10 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
 
   if (logStream) {
     logStream.write(
-      `┌─ 🤖 [EXECUTION] ${agentName} · ${playbookName} · 🟢 LIVE ─────────────────────────────\n` +
-        `│ Started:   ${startTimeIso}\n` +
-        `│ PR:        ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
-        `│ Worktree:  ${worktreePath}\n` +
-        `├─ Live Output Stream ───────────────────────────────────────────────────────────────────\n`
+      `=== [${startTimeIso}] DISPATCH: ${agentName} · ${playbookName} · 🟢 LIVE ===\n` +
+        `PR:       ${pr.key.owner}/${pr.key.repo}#${pr.key.number} (${pr.branch} -> ${pr.baseBranch || 'main'})\n` +
+        `Worktree: ${worktreePath}\n` +
+        `--------------------------------------------------------------------------------\n`
     );
   }
 
@@ -578,10 +583,48 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     pid: child.pid,
     logPath: logFile,
     status: 'running',
+    touchedFiles: [],
   };
 
   setWorker(data, pr.key, worker);
   saveState(data, undefined, cwd);
+
+  // Background Worktree Real-Time Activity Poller
+  let previousTouched: string[] = [];
+  const activityPoller = setInterval(async () => {
+    if (worker.status !== 'running') {
+      clearInterval(activityPoller);
+      return;
+    }
+    try {
+      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
+      const currentFiles = statusOut
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => l.slice(3).trim());
+
+      const changed =
+        currentFiles.length !== previousTouched.length ||
+        currentFiles.some((f, idx) => f !== previousTouched[idx]);
+
+      if (changed) {
+        previousTouched = currentFiles;
+        worker.touchedFiles = currentFiles;
+        worker.lastActivity = `${currentFiles.length} file(s) modified`;
+        worker.lastActivityAt = Date.now();
+        saveState(data, undefined, cwd);
+
+        if (currentFiles.length > 0 && logStream && !logStream.destroyed) {
+          const sample = currentFiles.slice(0, 3).join(', ') + (currentFiles.length > 3 ? ` (+${currentFiles.length - 3} more)` : '');
+          const timeStr = new Date().toISOString().substring(11, 19);
+          logStream.write(`\n[${timeStr}] ⚡ File Activity: ${currentFiles.length} file(s) modified (${sample})\n`);
+        }
+      }
+    } catch {
+      // Ignore git polling errors during execution
+    }
+  }, 1500);
 
   let capturedOutput = '';
 
@@ -610,6 +653,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   });
 
   child.on('close', async (code, signal) => {
+    clearInterval(activityPoller);
     if (worker.status !== 'running') {
       // Already cancelled or handled
       return;
@@ -617,9 +661,19 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     const finishedAt = Date.now();
     const durationMs = finishedAt - startTime;
     const durationSec = (durationMs / 1000).toFixed(1);
+    const durationMinSec =
+      durationMs >= 60000
+        ? `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`
+        : `${durationSec}s`;
+
     try {
-      logStream?.write(`\n└─ [Completed in ${durationSec}s · Exit Code: ${code ?? 'none'}${signal ? ` · Signal: ${signal}` : ''}] ──────────────────────────────────────\n\n`);
-      logStream?.end();
+      if (logStream && !logStream.destroyed) {
+        logStream.write(
+          `\n--------------------------------------------------------------------------------\n` +
+            `=== [${new Date(finishedAt).toISOString()}] COMPLETED in ${durationMinSec} · Exit Code: ${code ?? (signal ? `signal ${signal}` : 0)} ===\n\n`
+        );
+        logStream.end();
+      }
     } catch {
       // Ignore end errors
     }
@@ -644,17 +698,79 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
       }
     }
 
-    // If fixer completed and push is allowed, check for changes and push
-    if ((playbookName === 'address-comments' || playbookName === 'ci-repair') && isSuccess && allowPush) {
+    // For mutable playbooks, commit and push any uncommitted edits or unpushed commits on clean exit
+    if (code === 0 && !playbookDef.readOnly && playbookName !== 'preflight-review') {
       try {
-        const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
-        if (statusOut.trim().length > 0) {
-          await execFileAsync('git', ['commit', '-am', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
+        // Verify worktree HEAD is on pr.branch before staging, committing, or pushing
+        let currentBranch = '';
+        try {
+          const { stdout: branchOut } = await execFileAsync('git', ['branch', '--show-current'], { cwd: worktreePath });
+          currentBranch = branchOut.trim();
+        } catch {
+          try {
+            const { stdout: symRefOut } = await execFileAsync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: worktreePath });
+            currentBranch = symRefOut.trim();
+          } catch {
+            currentBranch = '';
+          }
+        }
+
+        if (currentBranch !== pr.branch) {
+          // If HEAD is detached or on another branch (e.g. from gh pr checkout fallback), attempt to checkout pr.branch
+          try {
+            await execFileAsync('git', ['checkout', pr.branch], { cwd: worktreePath });
+            currentBranch = pr.branch;
+          } catch {
+            try {
+              await execFileAsync('git', ['checkout', '-B', pr.branch], { cwd: worktreePath });
+              currentBranch = pr.branch;
+            } catch (checkoutErr) {
+              throw new Error(
+                `Worktree HEAD is on '${currentBranch || 'detached HEAD'}', expected branch '${pr.branch}'. Failed to checkout '${pr.branch}': ${(checkoutErr as Error).message}`
+              );
+            }
+          }
+        }
+
+        // Stage modified and deleted tracked files (git add -u) to avoid sweeping in untracked junk dropped in worktree
+        await execFileAsync('git', ['add', '-u'], { cwd: worktreePath });
+        const { stdout: stagedOut } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: worktreePath });
+        if (stagedOut.trim().length > 0) {
+          await execFileAsync('git', ['commit', '-m', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
+        }
+
+        // Check if local branch has commits to push
+        let shouldPush = true;
+        try {
+          const { stdout: revOut } = await execFileAsync('git', ['rev-list', `origin/${pr.branch}..HEAD`, '--count'], { cwd: worktreePath });
+          if (parseInt(revOut.trim(), 10) === 0) {
+            shouldPush = false;
+          }
+        } catch {
+          // If tracking branch check fails, attempt push directly
+        }
+
+        if (shouldPush) {
           await execFileAsync('git', ['push', '--force-with-lease', 'origin', pr.branch], { cwd: worktreePath });
           appendLog(data, pr.key, `Fixer agent pushed fixes to branch '${pr.branch}'`);
+          try {
+            if (logStream && !logStream.destroyed) {
+              logStream.write(`\n[Overseer]: Successfully pushed commits to origin/${pr.branch}\n`);
+            }
+          } catch {
+            // Ignore logStream write errors
+          }
         }
-      } catch {
-        // Fallback
+      } catch (pushErr) {
+        const errMsg = (pushErr as Error).message;
+        appendLog(data, pr.key, `Failed to push fixes to branch '${pr.branch}': ${errMsg}`);
+        try {
+          if (logStream && !logStream.destroyed) {
+            logStream.write(`\n[Overseer Warning]: git push failed: ${errMsg}\n`);
+          }
+        } catch {
+          // Ignore logStream write errors
+        }
       }
     }
 
@@ -672,6 +788,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
       status: worker.status,
       exitCode: code ?? undefined,
       signal: signal ?? undefined,
+      touchedFiles: worker.touchedFiles,
     };
     recordAgentExecution(execRecord, undefined, cwd);
     saveState(data, undefined, cwd);
@@ -704,6 +821,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
       durationMs: finishedAt - startTime,
       status: 'failed',
       error: err.message,
+      touchedFiles: worker.touchedFiles,
     };
     recordAgentExecution(execRecord, undefined, cwd);
     saveState(data, undefined, cwd);
@@ -757,9 +875,11 @@ export function cancelWorker(data: AppState, prKey: PrKey, cwd?: string): boolea
 
 export {
   resolveWorktreeDir,
+  derivePushUrl,
   provisionWorktree,
   cleanupWorktree,
   resolveLogPath,
   cleanupPRLogs,
   cleanupPRArtifacts,
 };
+export type { ResolveWorktreeOptions, ProvisionWorktreeOptions } from './worktree.js';

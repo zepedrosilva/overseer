@@ -73,6 +73,8 @@ function getCharWidth(code: number): number {
     code === 0x2717 || code === 0x2716 || // ✗, ✖
     code === 0x25cb || code === 0x25cf || // ○, ●
     code === 0x25b2 || code === 0x25bc || // ▲, ▼
+    code === 0x276f || code === 0x276e || // ❯, ❮
+    code === 0x203a || code === 0x2039 || // ›, ‹
     code === 0x2014 || code === 0x2013 || // —, –
     code === 0x2026 ||                    // …
     (code >= 0x2500 && code <= 0x257f)    // Box Drawing ─, │, ┌, └, etc.
@@ -119,6 +121,14 @@ export function padEndVisual(str: string, targetLength: number, padChar: string 
     return str;
   }
   return str + padChar.repeat(targetLength - currentLen);
+}
+
+export function padStartVisual(str: string, targetLength: number, padChar: string = ' '): string {
+  const currentLen = visualLength(str);
+  if (currentLen >= targetLength) {
+    return str;
+  }
+  return padChar.repeat(targetLength - currentLen) + str;
 }
 
 export function truncateVisual(str: string, maxLength: number): string {

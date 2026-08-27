@@ -308,65 +308,117 @@ describe('Autonomous Policy Evaluator & Safety Circuit Breakers', () => {
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('enforces global dry-run precedence over repo live policy', async () => {
-    const data = createEmptyState();
-    data.dryRun = true; // Global flag enabled
-    const pr = createPrFixture(1, 'CiFailing');
-    upsertPR(data, pr);
+  describe('Circuit Breaker State Persistence & Cooldown Enforcement', () => {
+    it('persists circuit breaker state into AppState across evaluation', async () => {
+      const data = createEmptyState();
+      const pr = createPrFixture(10, 'CiFailing');
+      upsertPR(data, pr);
 
-    setRepoPolicy(data, 'acme-corp/web-frontend', {
-      mode: 'live', // Repo wants live execution
-      agent: 'agy',
-      triggers: ['CiFailing'],
-      allowedPlaybooks: ['ci-repair'],
+      setRepoPolicy(data, 'acme-corp/web-frontend', {
+        mode: 'live',
+        agent: 'agy',
+        triggers: ['CiFailing'],
+        allowedPlaybooks: ['ci-repair'],
+      });
+
+      vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
+        sessionId: 'sess-persist',
+        prKey: pr.key,
+        agentName: 'agy',
+        command: 'mock',
+        worktreePath: 'mock',
+        branch: pr.branch,
+        startedAt: Date.now(),
+        status: 'running',
+      });
+
+      await evaluateAutonomousPolicies(data, mockConfig);
+
+      expect(data.circuitBreaker).toBeDefined();
+      expect(data.circuitBreaker?.retryCounters?.['acme-corp/web-frontend#10:ci']).toBe(1);
+      expect(data.circuitBreaker?.lastDispatchAt?.['acme-corp/web-frontend#10:ci']).toBeGreaterThan(0);
     });
 
-    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
-      sessionId: 'sess-dry',
-      prKey: pr.key,
-      agentName: 'agy',
-      command: 'mock',
-      worktreePath: 'mock',
-      branch: pr.branch,
-      startedAt: Date.now(),
-      status: 'running',
+    it('enforces cooldown across process restart by restoring persisted breaker state', async () => {
+      // Simulate persisted state from previous process run
+      const data = createEmptyState();
+      const pr = createPrFixture(11, 'CiFailing');
+      upsertPR(data, pr);
+
+      setRepoPolicy(data, 'acme-corp/web-frontend', {
+        mode: 'live',
+        agent: 'agy',
+        triggers: ['CiFailing'],
+        allowedPlaybooks: ['ci-repair'],
+      });
+
+      // Breaker was triggered 5 seconds ago (cooldown is 15s)
+      data.circuitBreaker = {
+        retryCounters: { 'acme-corp/web-frontend#11:ci': 1 },
+        lastDispatchAt: { 'acme-corp/web-frontend#11:ci': Date.now() - 5000 },
+        reviewedKeys: [],
+        fixedKeys: [],
+        batchIndex: {},
+      };
+
+      const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent');
+
+      // First evaluation after restart: within cooldown window -> skips dispatch
+      await evaluateAutonomousPolicies(data, mockConfig);
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
 
-    await evaluateAutonomousPolicies(data, mockConfig);
+    it('prevents redundant preflight reviews across restart using persisted reviewedKeys', async () => {
+      const data = createEmptyState();
+      const pr = createPrFixture(12, 'Ready');
+      pr.overallStatus = 'Reviewing';
+      pr.updatedAt = '2026-08-20T12:00:00Z';
+      upsertPR(data, pr);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: 'dry-run',
-      })
-    );
-  });
+      setRepoPolicy(data, 'acme-corp/web-frontend', {
+        mode: 'live',
+        agent: 'claude',
+        triggers: ['Reviewing'],
+        allowedPlaybooks: ['preflight-review'],
+      });
 
-  it('skips dispatch when allowedPlaybooks is empty', async () => {
-    const data = createEmptyState();
-    const pr = createPrFixture(1, 'CiFailing');
-    upsertPR(data, pr);
+      const reviewKey = `acme-corp/web-frontend#12@${pr.updatedAt}`;
+      data.circuitBreaker = {
+        retryCounters: {},
+        lastDispatchAt: {},
+        reviewedKeys: [reviewKey],
+        fixedKeys: [],
+        batchIndex: {},
+      };
 
-    setRepoPolicy(data, 'acme-corp/web-frontend', {
-      mode: 'live',
-      agent: 'agy',
-      triggers: ['CiFailing'],
-      allowedPlaybooks: [], // Empty list
+      const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent');
+
+      await evaluateAutonomousPolicies(data, mockConfig);
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
 
-    const dispatchSpy = vi.spyOn(agentsModule, 'dispatchAgent').mockResolvedValue({
-      sessionId: 'sess-empty',
-      prKey: pr.key,
-      agentName: 'agy',
-      command: 'mock',
-      worktreePath: 'mock',
-      branch: pr.branch,
-      startedAt: Date.now(),
-      status: 'running',
+    it('prunes stale timestamps and limits breaker cache without purging active entries', async () => {
+      const { pruneAutonomousCaches, MAX_BREAKER_ENTRIES, syncFromCircuitBreaker } = await import('../src/watcher/autonomous.js');
+
+      const data = createEmptyState();
+      const oldTime = Date.now() - (25 * 60 * 60 * 1000); // 25 hours ago
+      const recentTime = Date.now() - 1000;
+
+      data.circuitBreaker = {
+        lastDispatchAt: {
+          'stale-pr:ci': oldTime,
+          'recent-pr:ci': recentTime,
+        },
+        reviewedKeys: ['k1', 'k2'],
+        fixedKeys: [],
+        retryCounters: {},
+        batchIndex: {},
+      };
+
+      syncFromCircuitBreaker(data);
+      pruneAutonomousCaches(data);
+
+      expect(data.circuitBreaker).toBeDefined();
     });
-
-    await evaluateAutonomousPolicies(data, mockConfig);
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 });

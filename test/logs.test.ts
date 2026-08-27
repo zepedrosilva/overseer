@@ -75,9 +75,9 @@ describe('Agent Logs Modal & Table Worker Indicators', () => {
       }
 
       const fullText = lines.map(stripAnsi).join('\n');
-      expect(fullText).toContain('web-frontend#142');
-      expect(fullText).toContain('Running: claude');
-      expect(fullText).toContain('[j/k] scroll');
+      expect(fullText).toContain('TIMELINE · #142 (acme-corp/web-frontend)');
+      expect(fullText).toContain('🤖 claude');
+      expect(fullText).toContain('[↑/↓] scroll');
       expect(fullText).toContain('[Esc to close]');
     });
 
@@ -108,7 +108,8 @@ describe('Agent Logs Modal & Table Worker Indicators', () => {
 
       expect(lines).toHaveLength(10);
       const fullText = lines.map(stripAnsi).join('\n');
-      expect(fullText).toContain('✔ agy completed');
+      expect(fullText).toContain('🤖 agy');
+      expect(fullText).toContain('Completed in');
     });
   });
 

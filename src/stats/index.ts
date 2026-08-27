@@ -7,6 +7,7 @@ import type {
   AggregatedStats,
   HistoricalPrRecord,
   LeaderboardSort,
+  ViewScope,
 } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 
@@ -30,7 +31,7 @@ function calculateMedian(values: number[]): number | null {
 export function calculateStats(
   data: AppState,
   timeframe: StatsTimeframe = '30d',
-  scopeOverride?: 'mine' | 'team',
+  scopeOverride?: ViewScope,
   sortBy: LeaderboardSort = 'merged30'
 ): AggregatedStats {
   const scope = scopeOverride || data.viewScope || 'mine';

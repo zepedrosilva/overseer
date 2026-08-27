@@ -189,6 +189,9 @@ export interface WorkerHandle {
   logPath?: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'dry-run' | 'interrupted';
   error?: string;
+  touchedFiles?: string[];
+  lastActivity?: string;
+  lastActivityAt?: number;
 }
 
 // ── Agent Telemetry & Analytics Models ──────────────────────────────────────
@@ -209,6 +212,7 @@ export interface AgentExecutionRecord {
   signal?: string;
   error?: string;
   summary?: string;
+  touchedFiles?: string[];
 }
 
 export interface AgentStatsStore {
@@ -276,6 +280,14 @@ export interface RepoPolicyConfig {
   allowedPlaybooks?: string[];
 }
 
+export interface CircuitBreakerState {
+  retryCounters?: Record<string, number>;
+  lastDispatchAt?: Record<string, number>;
+  reviewedKeys?: string[];
+  fixedKeys?: string[];
+  batchIndex?: Record<string, number>;
+}
+
 export interface AppSettings {
   defaultAgent: string;
   pollIntervalSecs: number;
@@ -295,8 +307,13 @@ export interface ApiServerConfig {
   port: number;
 }
 
+export interface AgentsExtensionConfig {
+  enabled: boolean;
+}
+
 export interface AppExtensions {
   api: ApiServerConfig;
+  agents: AgentsExtensionConfig;
 }
 
 export interface SettingsConfigFile {
@@ -394,7 +411,7 @@ export interface MemberLeaderboardEntry {
 
 export interface AggregatedStats {
   timeframe: StatsTimeframe;
-  scope: 'mine' | 'team';
+  scope: ViewScope;
   totalPRs: number;
   mergedPRs: number;
   mergedPRs7: number;
@@ -444,6 +461,16 @@ export interface BackfillProgress {
   log: string[];
 }
 
+export type ViewScope = 'mine' | 'team' | 'agents';
+
+export interface AgentsTabState {
+  selectedPrIndex: number;
+  selectedSessionIndex: number;
+  focusedPane: 'left' | 'right';
+  expandedSessionIds: Set<string>;
+  scrollOffset: number;
+}
+
 // ── App State ───────────────────────────────────────────────────────────────
 
 export interface AppState {
@@ -455,7 +482,7 @@ export interface AppState {
   repos: RepoHandle[];
   prs: Map<string, PrState>; // key: prKeyToString(key)
   workers: Map<string, WorkerHandle>; // key: prKeyToString(prKey)
-  viewScope?: 'mine' | 'team';
+  viewScope?: ViewScope;
   teamMembers?: string[];
   teamProfiles?: Record<string, { login: string; name?: string }>;
   historicalStats?: HistoricalStatsStore;
@@ -464,6 +491,7 @@ export interface AppState {
   isPolling?: boolean;
   currentUser?: string;
   rateLimitedUntil?: number;
+  circuitBreaker?: CircuitBreakerState;
 }
 
 // ── Legacy/Adapter Config Type for Seamless Integration ─────────────────────
@@ -521,7 +549,7 @@ export interface ApiStatusResponse {
   needsAttentionCount: number;
   passingCiCount: number;
   reviewReadyCount: number;
-  viewScope: 'mine' | 'team';
+  viewScope: ViewScope;
   currentUser?: string;
   rateLimitedUntil?: number;
   items: ApiStatusItem[];
@@ -571,7 +599,8 @@ export type ApiActionHandler = (
     text?: string;
     agentName?: string;
     playbookName?: string;
-    trigger?: 'manual' | 'autonomous_ci' | 'autonomous_review' | 'api';
-    source?: 'tui' | 'api';
+    timeframeDays?: number;
+    days?: number;
+    forceRefresh?: boolean;
   }
 ) => void | Promise<void>;

@@ -11,7 +11,7 @@ export const BUILTIN_PLAYBOOKS: Record<string, PlaybookDefinition> = {
       'You are already located directly at the root of the repository worktree for PR #{pr} ({owner}/{repo}, branch: \'{branch}\'). Current working directory is the repository root (\'.\'). Do NOT search for or locate the repository elsewhere on the system.\n\n' +
       'The CI check \'{failingCheck}\' failed on this PR.\n\n' +
       'Failing Logs & Diagnostics:\n{ciLogs}\n\n' +
-      'Investigate the root cause, apply fixes directly in this codebase, verify by running tests locally, and commit with message "fix(ci): address {failingCheck} failure".',
+      'Investigate the root cause, apply fixes directly in this codebase, verify by running tests locally, commit with message "fix(ci): address {failingCheck} failure", and push to origin {branch}.',
     includeCiLogs: true,
   },
   'address-comments': {
@@ -21,7 +21,7 @@ export const BUILTIN_PLAYBOOKS: Record<string, PlaybookDefinition> = {
       'You are already located directly at the root of the repository worktree for PR #{pr} ({owner}/{repo}, branch: \'{branch}\'). Current working directory is the repository root (\'.\'). Do NOT search for or locate the repository elsewhere on the system.\n\n' +
       'Address the following unresolved review comments on this PR:\n\n' +
       '{comments}\n\n' +
-      'Apply the requested changes directly to the codebase, verify that tests pass, and commit with message "refactor: address review comments".',
+      'Apply the requested changes directly to the codebase, verify that tests pass, commit with message "refactor: address review comments", and push to origin {branch}.',
     includeReviewComments: true,
   },
   'preflight-review': {

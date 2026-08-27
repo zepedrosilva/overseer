@@ -8,7 +8,7 @@ import { calculateLayout, padEndVisual } from './layout.js';
 import { renderBanner, renderStatsBar, renderDivider } from './banner.js';
 import { renderSearchBar, renderScopeTabBar, filterPRs } from './search.js';
 import { renderTable } from './table.js';
-import { renderDetailsModal } from './details.js';
+import { renderDetails, renderDetailsModal } from './details.js';
 import { renderSettingsModal, SETTINGS_ITEMS, POLL_INTERVALS, RECENT_WINDOW_OPTIONS, TEAM_ACTIVE_WINDOW_OPTIONS, TEAM_POLL_INTERVALS } from './settings.js';
 import { renderDiffModal, parseAndColorizeDiff } from './diff.js';
 import { renderLogsModal, loadPRLogFile } from './logs.js';
@@ -17,11 +17,13 @@ import { loadAgentStats, calculateAgentStats } from '../agents/stats.js';
 import { renderBackfillModal } from './backfill.js';
 import { renderHelpModal } from './help.js';
 import { renderAgentModal, PLAYBOOK_OPTIONS } from './agentModal.js';
-import { calculateStats, backfillHistoricalStats } from '../stats/index.js';
+import { renderAgentsTab, collectPRWorkflowGroups } from './agentsTab.js';
+import { cancelWorker } from '../agents/index.js';
+import { calculateStats, backfillHistoricalStats, backfill30DayStats } from '../stats/index.js';
 import { renderFooter, type FooterMode, type FooterContext } from './footer.js';
-import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getRepoRoleAgent, getAvailableAgents, saveState, saveSettings, loadAgentsConfig } from '../app/state.js';
-import { getAvailablePlaybooks } from '../agents/playbooks.js';
+import { getRepoAgent, setRepoAgent, getRepoPolicy, setRepoPolicy, getRepoMode, getRepoRoleAgent, getAvailableAgents, saveState, saveSettings } from '../app/state.js';
 import { getPRDiff } from '../watcher/gh.js';
+import { colors, rgbColor } from './colors.js';
 import type { BackfillProgress, LeaderboardSort } from '../app/types.js';
 
 export type TUIActionCallback = (action: string, payload?: Record<string, unknown>) => void | Promise<void>;
@@ -41,8 +43,10 @@ export function createTUI(
     apiEnabled?: boolean;
     apiPort?: number;
     onSettingsChange?: () => void;
+    cwd?: string;
   }
 ): TUIController {
+  const cwd = options?.cwd || process.cwd();
   let footerMode: FooterMode = 'NORMAL';
   let inputBuffer = '';
   let statusMessage: string | undefined;
@@ -64,7 +68,7 @@ export function createTUI(
   let isLogsModalOpen = false;
   let logsScrollOffset = 0;
   let isStatsModalOpen = false;
-  let statsActiveTab: 'pr' | 'agents' = 'pr';
+  let statsActiveTab: 'mine' | 'team' | 'agents' = 'mine';
   let statsTimeframe: StatsTimeframe = '30d';
   let statsSortBy: LeaderboardSort = 'merged30';
   let isHelpModalOpen = false;
@@ -75,43 +79,18 @@ export function createTUI(
   let selectedAgentIndex = 0;
   let availableAgents: string[] = getAvailableAgents(data);
   let selectedPlaybookIndex = 0;
+  const availablePlaybooks = [
+    'preflight-review',
+    'ci-repair',
+    'address-comments',
+    'rebase-resolver',
+    'custom...',
+  ];
 
-  function getPlaybooksList(): string[] {
-    const list = getAvailablePlaybooks(loadAgentsConfig());
-    if (!list.includes('custom...')) {
-      list.push('custom...');
-    }
-    return list;
-  }
-
-  function timeframeToDays(tf: StatsTimeframe): number {
-    switch (tf) {
-      case '7d': return 7;
-      case '14d': return 14;
-      case '30d': return 30;
-      case '60d': return 60;
-      case '90d': return 90;
-      default: return 30;
-    }
-  }
-
-  let cachedAgentStats: ReturnType<typeof calculateAgentStats> | null = null;
-  let cachedStats: ReturnType<typeof calculateStats> | null = null;
-
-  function refreshStatsCache(): void {
-    const days = timeframeToDays(statsTimeframe);
-    cachedStats = calculateStats(data, statsTimeframe, data.viewScope || 'mine', statsSortBy);
-    const agentStatsStore = loadAgentStats();
-    cachedAgentStats = calculateAgentStats(agentStatsStore.records, days, {
-      repoPolicies: Object.fromEntries(
-        data.repos.map((r) => [`${r.owner}/${r.repo}`.toLowerCase(), getRepoPolicy(data, r) || {}])
-      ),
-      repoAgents: Object.fromEntries(
-        data.repos.map((r) => [`${r.owner}/${r.repo}`.toLowerCase(), getRepoAgent(data, r)])
-      ),
-      settings: { defaultAgent: data.settings.defaultAgent },
-    });
-  }
+  let agentsSelectedPrIndex = 0;
+  let agentsSelectedSessionIndex = 0;
+  let agentsFocusedPane: 'left' | 'right' = 'left';
+  const agentsExpandedSessionIds = new Set<string>();
 
   // Live animation ticker (100ms) for spinners during polling, active CI workflows, and worker runs
   const animationTimer = setInterval(() => {
@@ -220,6 +199,14 @@ export function createTUI(
   }
 
   function getSelectedPR(): PrState | null {
+    if (data.viewScope === 'agents') {
+      const groups = collectPRWorkflowGroups(data, cwd);
+      if (groups.length === 0) return null;
+      const safePrIndex = Math.max(0, Math.min(groups.length - 1, agentsSelectedPrIndex));
+      const group = groups[safePrIndex];
+      if (!group) return null;
+      return data.prs?.get(group.keyStr) || null;
+    }
     const prs = getFilteredPRs();
     if (prs.length === 0) return null;
     return prs[selectedRow] || null;
@@ -278,10 +265,7 @@ export function createTUI(
     isSettingsModalOpen = false;
     isStatsModalOpen = false;
 
-    const layout = calculateLayout(process.stdout.columns, process.stdout.rows);
-    const bodyHeight = Math.max(2, layout.bodyHeight - 2);
-    const logLines = loadPRLogFile(pr);
-    logsScrollOffset = Math.max(0, logLines.length - bodyHeight);
+    logsScrollOffset = 0;
     render();
   }
 
@@ -349,35 +333,63 @@ export function createTUI(
         return p.scope === 'team' || p.scope === 'both';
       }).length;
 
+      const isAgentsEnabled = data.extensions?.agents?.enabled !== false;
+      const agentGroups = isAgentsEnabled ? collectPRWorkflowGroups(data, cwd) : [];
+      const agentsCount = agentGroups.length;
+      const hasRunningAgent = isAgentsEnabled && Array.from(data.workers?.values() || []).some((w) => w.status === 'running');
+
       allLines.push(renderDivider(layout.width));
       allLines.push(
         renderScopeTabBar({
           scope: data.viewScope || 'mine',
           mineCount,
           teamCount,
+          agentsCount,
+          hasRunningAgent,
+          agentsEnabled: isAgentsEnabled,
           teamMembersCount: data.teamMembers?.length,
           teamName: data.settings.team,
+          spinnerTick,
           width: Math.max(10, layout.width - 2),
         })
       );
       allLines.push(renderSearchBar(searchQuery, footerMode === 'SEARCH', Math.max(10, layout.width - 2)));
       allLines.push(renderDivider(layout.width));
 
-      // 4. Main Body Table (Full width) with live worker spinner badges
-      const tableLines = renderTable({
-        prs: filteredPRs,
-        selectedIndex: selectedRow,
-        width: layout.width,
-        height: layout.bodyHeight,
-        scope: data.viewScope || 'mine',
-        currentUser: data.currentUser,
-        workers: data.workers,
-        repoPolicies: data.repoPolicies,
-        teamProfiles: data.teamProfiles,
-        spinnerTick,
-      });
-      for (let i = 0; i < layout.bodyHeight; i++) {
-        allLines.push(tableLines[i] || padEndVisual('', layout.width));
+      // 4. Main Body: Either Agents Master/Detail Tab or PR Table
+      if (isAgentsEnabled && data.viewScope === 'agents') {
+        const agentTabLines = renderAgentsTab({
+          data,
+          width: layout.width,
+          height: layout.bodyHeight,
+          selectedPrIndex: agentsSelectedPrIndex,
+          selectedSessionIndex: agentsSelectedSessionIndex,
+          focusedPane: agentsFocusedPane,
+          expandedSessionIds: agentsExpandedSessionIds,
+          scrollOffset: 0,
+          spinnerTick,
+          cwd,
+        });
+        for (let i = 0; i < layout.bodyHeight; i++) {
+          allLines.push(agentTabLines[i] || padEndVisual('', layout.width));
+        }
+      } else {
+        const tableLines = renderTable({
+          prs: filteredPRs,
+          selectedIndex: selectedRow,
+          width: layout.width,
+          height: layout.bodyHeight,
+          scope: data.viewScope === 'team' ? 'team' : 'mine',
+          currentUser: data.currentUser,
+          workers: data.workers,
+          repoPolicies: data.repoPolicies,
+          agentsEnabled: isAgentsEnabled,
+          teamProfiles: data.teamProfiles,
+          spinnerTick,
+        });
+        for (let i = 0; i < layout.bodyHeight; i++) {
+          allLines.push(tableLines[i] || padEndVisual('', layout.width));
+        }
       }
 
       // 5. Divider & Footer
@@ -389,10 +401,11 @@ export function createTUI(
         mode: footerMode,
         selectedPR,
         inputBuffer,
+        scope: data.viewScope || 'mine',
         selectedAgent: currentChosenAgent,
         availableAgents,
         selectedPlaybookIndex,
-        availablePlaybooks: getPlaybooksList(),
+        availablePlaybooks,
         repoMode: selectedPR ? getRepoMode(data, selectedPR.key) : undefined,
         message: statusMessage,
       };
@@ -506,6 +519,7 @@ export function createTUI(
           modalHeight,
           scrollOffset: logsScrollOffset,
           spinnerTick,
+          cwd,
         });
 
         const xStart = Math.max(0, Math.floor((layout.width - modalWidth) / 2));
@@ -528,17 +542,16 @@ export function createTUI(
         const widthRatio = isSmallScreen ? 0.96 : 0.90;
         const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
-        if (!cachedStats || !cachedAgentStats) {
-          refreshStatsCache();
-        }
-        const stats = cachedStats!;
-        const agentStats = cachedAgentStats!;
+        const statsScope = data.viewScope === 'team' ? 'team' : 'mine';
+        const stats = calculateStats(data, statsTimeframe, statsScope, statsSortBy);
+        const agentStatsStore = loadAgentStats(undefined, cwd);
+        const agentStats = calculateAgentStats(agentStatsStore.records, 30);
         const modalLines = renderStatsModal({
           stats,
           agentStats,
           activeTab: statsActiveTab,
           timeframe: statsTimeframe,
-          scope: data.viewScope || 'mine',
+          scope: statsScope,
           sortBy: statsSortBy,
           teamName: data.settings.team,
           modalWidth,
@@ -612,10 +625,10 @@ export function createTUI(
       // 13. Agent & Automation Modal Overlay (if open)
       if (isAgentModalOpen && selectedPR && !isSettingsModalOpen && !isDiffModalOpen && !isLogsModalOpen && !isDetailsModalOpen && !isStatsModalOpen && !isHelpModalOpen && !isBackfillModalOpen) {
         const headerOffset = bannerLines.length + 5;
-        const modalHeight = Math.max(16, Math.min(22, layout.bodyHeight));
+        const modalHeight = Math.max(6, layout.bodyHeight);
         const isSmallScreen = layout.width < 90;
-        const widthRatio = isSmallScreen ? 0.96 : 0.85;
-        const modalWidth = Math.max(50, Math.min(84, Math.floor(layout.width * widthRatio)));
+        const widthRatio = isSmallScreen ? 0.96 : 0.90;
+        const modalWidth = Math.max(20, Math.min(layout.width - 2, Math.floor(layout.width * widthRatio)));
 
         const modalLines = renderAgentModal({
           data,
@@ -634,6 +647,9 @@ export function createTUI(
           if (lineIdx < allLines.length - 2) {
             allLines[lineIdx] = `${leftPad}${modalLines[r]}${rightPad}`;
           }
+        }
+        for (let r = modalLines.length; headerOffset + r < allLines.length - 2; r++) {
+          allLines[headerOffset + r] = ' '.repeat(layout.width);
         }
       }
 
@@ -846,6 +862,16 @@ export function createTUI(
           } else if (item.id === 'apiEnabled') {
             data.extensions.api.enabled = !data.extensions.api.enabled;
             options?.onSettingsChange?.();
+          } else if (item.id === 'agentsEnabled') {
+            if (!data.extensions.agents) {
+              data.extensions.agents = { enabled: true };
+            }
+            data.extensions.agents.enabled = !data.extensions.agents.enabled;
+            if (!data.extensions.agents.enabled && data.viewScope === 'agents') {
+              data.viewScope = 'mine';
+            }
+            saveSettings(data, undefined, cwd);
+            options?.onSettingsChange?.();
           }
           saveState(data);
           render();
@@ -934,62 +960,38 @@ export function createTUI(
 
       // Handle Stats Pop-up Modal Keyboard Actions
       if (isStatsModalOpen) {
-        if (key === '\x1b' || key === 'q' || key === 'Q' || key === '\x0d') {
+        if (key === '\x1b' || key === 'q' || key === 'Q' || key === '\x0d' || key === 'p' || key === 'P') {
           isStatsModalOpen = false;
           render();
           return;
         }
 
-        if (key === 'a' || key === 'A') { // Switch to Agent Telemetry tab
-          statsActiveTab = statsActiveTab === 'agents' ? 'pr' : 'agents';
-          refreshStatsCache();
-          render();
-          return;
-        }
-
-        if (key === 'p' || key === 'P') { // Switch back to PR tab or close
-          if (statsActiveTab === 'agents') {
-            statsActiveTab = 'pr';
-            refreshStatsCache();
-            render();
+        if (key === '\x09' || key === 't' || key === 'T') { // Tab or t cycles tabs: Mine -> Team -> Agents -> Mine
+          if (statsActiveTab === 'mine') {
+            statsActiveTab = 'team';
+          } else if (statsActiveTab === 'team') {
+            statsActiveTab = 'agents';
           } else {
-            isStatsModalOpen = false;
-            render();
+            statsActiveTab = 'mine';
           }
-          return;
-        }
-
-        if (key === '1') {
-          statsTimeframe = '7d';
-          refreshStatsCache();
           render();
           return;
         }
 
-        if (key === '2') {
-          statsTimeframe = '14d';
-          refreshStatsCache();
+        if (key === '1') { // [1] Mine Tab
+          statsActiveTab = 'mine';
           render();
           return;
         }
 
-        if (key === '3') {
-          statsTimeframe = '30d';
-          refreshStatsCache();
+        if (key === '2') { // [2] Team Tab
+          statsActiveTab = 'team';
           render();
           return;
         }
 
-        if (key === '4') {
-          statsTimeframe = '60d';
-          refreshStatsCache();
-          render();
-          return;
-        }
-
-        if (key === '5') {
-          statsTimeframe = '90d';
-          refreshStatsCache();
+        if (key === '3' || key === 'a' || key === 'A') { // [3] / a: Agents Tab
+          statsActiveTab = 'agents';
           render();
           return;
         }
@@ -998,7 +1000,6 @@ export function createTUI(
           const tfList: StatsTimeframe[] = ['7d', '14d', '30d', '60d', '90d'];
           const idx = tfList.indexOf(statsTimeframe);
           statsTimeframe = tfList[(idx + 1) % tfList.length];
-          refreshStatsCache();
           render();
           return;
         }
@@ -1017,7 +1018,6 @@ export function createTUI(
           const sortCriteria: LeaderboardSort[] = ['merged7', 'merged14', 'merged30', 'merged60', 'merged90', 'total', 'response', 'reviews', 'comments', 'stale'];
           const idx = sortCriteria.indexOf(statsSortBy);
           statsSortBy = sortCriteria[(idx + 1) % sortCriteria.length];
-          refreshStatsCache();
           render();
           return;
         }
@@ -1026,7 +1026,6 @@ export function createTUI(
           data.viewScope = data.viewScope === 'team' ? 'mine' : 'team';
           selectedRow = 0;
           saveState(data);
-          refreshStatsCache();
           render();
           return;
         }
@@ -1349,23 +1348,14 @@ export function createTUI(
 
         if (key === 'm' || key === 'M') { // Toggle repo mode: OFF -> DRY-RUN -> LIVE
           if (pr) {
+            const modes: ('off' | 'dry-run' | 'live')[] = ['off', 'dry-run', 'live'];
             const currentMode = getRepoMode(data, pr.key);
-            if (currentMode === 'off') {
-              const existingPolicy = getRepoPolicy(data, pr.key) || {};
-              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'dry-run' });
-              saveSettings(data);
-              saveState(data);
-              render();
-            } else if (currentMode === 'dry-run') {
-              footerMode = 'CONFIRM_LIVE_MODE';
-              render();
-            } else {
-              const existingPolicy = getRepoPolicy(data, pr.key) || {};
-              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'off' });
-              saveSettings(data);
-              saveState(data);
-              render();
-            }
+            const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            setRepoPolicy(data, pr.key, { ...existingPolicy, mode: nextMode });
+            saveSettings(data);
+            saveState(data);
+            render();
           }
           return;
         }
@@ -1475,23 +1465,14 @@ export function createTUI(
 
         if (key === 'm' || key === 'M') { // Toggle repo mode: OFF -> DRY-RUN -> LIVE
           if (pr) {
+            const modes: ('off' | 'dry-run' | 'live')[] = ['off', 'dry-run', 'live'];
             const currentMode = getRepoMode(data, pr.key);
-            if (currentMode === 'off') {
-              const existingPolicy = getRepoPolicy(data, pr.key) || {};
-              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'dry-run' });
-              saveSettings(data);
-              saveState(data);
-              render();
-            } else if (currentMode === 'dry-run') {
-              footerMode = 'CONFIRM_LIVE_MODE';
-              render();
-            } else {
-              const existingPolicy = getRepoPolicy(data, pr.key) || {};
-              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'off' });
-              saveSettings(data);
-              saveState(data);
-              render();
-            }
+            const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+            const existingPolicy = getRepoPolicy(data, pr.key) || {};
+            setRepoPolicy(data, pr.key, { ...existingPolicy, mode: nextMode });
+            saveSettings(data);
+            saveState(data);
+            render();
           }
           return;
         }
@@ -1536,7 +1517,6 @@ export function createTUI(
       // Handle Playbook Preset Selection Mode (PLAYBOOK_SELECT)
       if (footerMode === 'PLAYBOOK_SELECT') {
         const pr = getSelectedPR();
-        const playbooksList = getPlaybooksList();
 
         if (key === '\x1b') { // Esc goes back to agent picker
           footerMode = 'AGENT_SELECT';
@@ -1546,26 +1526,26 @@ export function createTUI(
 
         // Direct number key selection
         const num = parseInt(key, 10);
-        if (!isNaN(num) && num >= 1 && num <= playbooksList.length) {
+        if (!isNaN(num) && num >= 1 && num <= availablePlaybooks.length) {
           selectedPlaybookIndex = num - 1;
           render();
           return;
         }
 
         if (key === '\x1b[D' || key === 'h') { // Left
-          selectedPlaybookIndex = (selectedPlaybookIndex - 1 + playbooksList.length) % playbooksList.length;
+          selectedPlaybookIndex = (selectedPlaybookIndex - 1 + availablePlaybooks.length) % availablePlaybooks.length;
           render();
           return;
         }
 
         if (key === '\x1b[C' || key === 'l' || key === '\t') { // Right or Tab
-          selectedPlaybookIndex = (selectedPlaybookIndex + 1) % playbooksList.length;
+          selectedPlaybookIndex = (selectedPlaybookIndex + 1) % availablePlaybooks.length;
           render();
           return;
         }
 
         if (key === '\x0d') { // Enter dispatches selected playbook or opens custom prompt
-          const chosenPlaybook = playbooksList[selectedPlaybookIndex];
+          const chosenPlaybook = availablePlaybooks[selectedPlaybookIndex];
           const chosenAgent = availableAgents[selectedAgentIndex] || 'claude';
 
           if (chosenPlaybook === 'custom...') {
@@ -1652,8 +1632,8 @@ export function createTUI(
         return;
       }
 
-      // Handle Confirmation Modals (CONFIRM_MERGE, CONFIRM_CLOSE, CONFIRM_LIVE_MODE)
-      if (footerMode === 'CONFIRM_MERGE' || footerMode === 'CONFIRM_CLOSE' || footerMode === 'CONFIRM_LIVE_MODE') {
+      // Handle Confirmation Modals (CONFIRM_MERGE, CONFIRM_CLOSE)
+      if (footerMode === 'CONFIRM_MERGE' || footerMode === 'CONFIRM_CLOSE') {
         const currentMode = footerMode;
         if (key === 'y' || key === 'Y') {
           footerMode = 'NORMAL';
@@ -1661,15 +1641,6 @@ export function createTUI(
             onAction('merge', { pr: getSelectedPR() });
           } else if (currentMode === 'CONFIRM_CLOSE') {
             onAction('close', { pr: getSelectedPR() });
-          } else if (currentMode === 'CONFIRM_LIVE_MODE') {
-            const pr = getSelectedPR();
-            if (pr) {
-              const existingPolicy = getRepoPolicy(data, pr.key) || {};
-              setRepoPolicy(data, pr.key, { ...existingPolicy, mode: 'live' });
-              saveSettings(data);
-              saveState(data);
-              statusMessage = `Enabled LIVE autonomous mode for ${pr.key.owner}/${pr.key.repo}`;
-            }
           }
           render();
           return;
@@ -1691,10 +1662,18 @@ export function createTUI(
         return;
       }
 
-      if (key === '\t' || key === 't') { // Tab or t: Toggle Scope
-        data.viewScope = data.viewScope === 'team' ? 'mine' : 'team';
+      const isAgentsEnabled = data.extensions?.agents?.enabled !== false;
+
+      if (key === '\t' || key === 't') { // Tab or t: Toggle / Cycle Scope
+        if (data.viewScope === 'mine') {
+          data.viewScope = 'team';
+        } else if (data.viewScope === 'team' && isAgentsEnabled) {
+          data.viewScope = 'agents';
+        } else {
+          data.viewScope = 'mine';
+        }
         selectedRow = 0;
-        saveState(data);
+        saveState(data, undefined, cwd);
         render();
         return;
       }
@@ -1702,7 +1681,7 @@ export function createTUI(
       if (key === '1') { // 1: Mine Scope
         data.viewScope = 'mine';
         selectedRow = 0;
-        saveState(data);
+        saveState(data, undefined, cwd);
         render();
         return;
       }
@@ -1710,9 +1689,105 @@ export function createTUI(
       if (key === '2') { // 2: Team Scope
         data.viewScope = 'team';
         selectedRow = 0;
-        saveState(data);
+        saveState(data, undefined, cwd);
         render();
         return;
+      }
+
+      if (key === '3') { // 3: Agents Scope (only if enabled)
+        if (isAgentsEnabled) {
+          data.viewScope = 'agents';
+          agentsSelectedPrIndex = 0;
+          agentsSelectedSessionIndex = 0;
+          saveState(data, undefined, cwd);
+          render();
+        }
+        return;
+      }
+
+      // Handle Agents Tab Keybindings
+      if (isAgentsEnabled && data.viewScope === 'agents') {
+        const groups = collectPRWorkflowGroups(data, cwd);
+        const safePrIdx = Math.max(0, Math.min(groups.length - 1, agentsSelectedPrIndex));
+        const activeGroup = groups[safePrIdx];
+
+        if (key === '\x1b[C') { // Right Arrow: focus right pane
+          const totalSessions = activeGroup ? (activeGroup.activeWorker ? 1 : 0) + activeGroup.records.length : 0;
+          if (totalSessions > 0) {
+            agentsFocusedPane = 'right';
+            agentsSelectedSessionIndex = 0;
+          }
+          render();
+          return;
+        }
+
+        if (key === '\x1b[D') { // Left Arrow: focus left pane
+          agentsFocusedPane = 'left';
+          render();
+          return;
+        }
+
+        if (key === '\x1b[A' || key === 'k' || key === '\x1bOA') { // Up
+          if (agentsFocusedPane === 'left') {
+            agentsSelectedPrIndex = Math.max(0, agentsSelectedPrIndex - 1);
+            agentsSelectedSessionIndex = 0;
+          } else {
+            agentsSelectedSessionIndex = Math.max(0, agentsSelectedSessionIndex - 1);
+          }
+          render();
+          return;
+        }
+
+        if (key === '\x1b[B' || key === 'j' || key === '\x1bOB') { // Down
+          if (agentsFocusedPane === 'left') {
+            agentsSelectedPrIndex = Math.min(Math.max(0, groups.length - 1), agentsSelectedPrIndex + 1);
+            agentsSelectedSessionIndex = 0;
+          } else {
+            const totalSessions = activeGroup ? (activeGroup.activeWorker ? 1 : 0) + activeGroup.records.length : 0;
+            agentsSelectedSessionIndex = Math.min(Math.max(0, totalSessions - 1), agentsSelectedSessionIndex + 1);
+          }
+          render();
+          return;
+        }
+
+        if (key === ' ' || key === '\x0d') { // Space or Enter: toggle expand/collapse session card
+          if (activeGroup) {
+            const allSessions: string[] = [];
+            if (activeGroup.activeWorker) allSessions.push(activeGroup.activeWorker.sessionId || 'active-worker');
+            for (const r of activeGroup.records) allSessions.push(r.sessionId);
+            const targetId = allSessions[agentsSelectedSessionIndex] || allSessions[0];
+            if (targetId) {
+              if (agentsExpandedSessionIds.has(targetId)) {
+                agentsExpandedSessionIds.delete(targetId);
+              } else {
+                agentsExpandedSessionIds.add(targetId);
+              }
+            }
+          }
+          render();
+          return;
+        }
+
+        if (key === 'c' || key === 'C') { // Cancel running worker for selected PR
+          if (activeGroup?.activeWorker) {
+            cancelWorker(data, activeGroup.prKey, cwd);
+            statusMessage = `Canceled active worker for #${activeGroup.number}`;
+          }
+          render();
+          return;
+        }
+
+        if (key === 'a' || key === 'A') { // Dispatch playbook for selected PR
+          if (activeGroup) {
+            const pr = data.prs?.get(activeGroup.keyStr);
+            if (pr) {
+              isAgentModalOpen = true;
+              agentModalPlaybookIndex = 0;
+            }
+          }
+          render();
+          return;
+        }
       }
 
       if (key === 'p' || key === 'P' || key === 'S') { // p: Open Stats Modal
@@ -1723,6 +1798,15 @@ export function createTUI(
         isLogsModalOpen = false;
         isHelpModalOpen = false;
         isBackfillModalOpen = false;
+
+        // Automatically choose the mode based on where it was triggered from
+        if (data.viewScope === 'agents') {
+          statsActiveTab = 'agents';
+        } else if (data.viewScope === 'team') {
+          statsActiveTab = 'team';
+        } else {
+          statsActiveTab = 'mine';
+        }
         render();
         return;
       }
@@ -1848,6 +1932,11 @@ export function createTUI(
       }
 
       if (key === 'a') { // Open Agent & Automation Modal
+        if (!isAgentsEnabled) {
+          statusMessage = 'AI agents are disabled in settings (Press [s])';
+          render();
+          return;
+        }
         const pr = getSelectedPR();
         if (pr) {
           isAgentModalOpen = true;
@@ -1857,26 +1946,17 @@ export function createTUI(
         return;
       }
 
-      if (key === 'C' || key === 'X' || key === 'K') { // Cancel running worker process for selected PR
-        const pr = getSelectedPR();
-        if (pr) {
-          const keyStr = prKeyToString(pr.key);
-          const worker = data.workers.get(keyStr);
-          if (worker && worker.status === 'running') {
-            onAction('cancel-agent', { pr });
-            statusMessage = `Cancelling agent worker for #${pr.key.number}...`;
-            render();
-            return;
-          }
-        }
-      }
-
       if (key === 'd') { // Diff
         openDiffForSelectedPR();
         return;
       }
 
       if (key === 'l' || key === 'L') { // Agent Logs
+        if (!isAgentsEnabled) {
+          statusMessage = 'AI agents are disabled in settings (Press [s])';
+          render();
+          return;
+        }
         openLogsForSelectedPR();
         return;
       }

@@ -22,6 +22,7 @@ import type {
   MemberBackfillWatermark,
   RepoPolicyConfig,
   RepoPolicyMode,
+  CircuitBreakerState,
 } from './types.js';
 import { prKeyToString } from './types.js';
 import { BUILTIN_PRESETS } from '../agents/presets.js';
@@ -66,6 +67,9 @@ export const DEFAULT_EXTENSIONS: AppExtensions = {
     enabled: false,
     port: 3210,
   },
+  agents: {
+    enabled: true,
+  },
 };
 
 export function createEmptyState(
@@ -81,6 +85,10 @@ export function createEmptyState(
       ...DEFAULT_EXTENSIONS.api,
       ...(extensions?.api || {}),
     },
+    agents: {
+      ...DEFAULT_EXTENSIONS.agents,
+      ...(extensions?.agents || {}),
+    },
   };
 
   return {
@@ -94,6 +102,13 @@ export function createEmptyState(
     workers: new Map<string, WorkerHandle>(),
     viewScope: 'mine',
     historicalStats: { records: [] },
+    circuitBreaker: {
+      retryCounters: {},
+      lastDispatchAt: {},
+      reviewedKeys: [],
+      fixedKeys: [],
+      batchIndex: {},
+    },
     dryRun: settings.dryRun,
     lastPolled: undefined,
   };
@@ -202,6 +217,13 @@ export function saveState(data: AppState, customPath?: string, cwd: string = pro
     teamMembers: data.teamMembers || [],
     teamProfiles: data.teamProfiles || {},
     historicalStats: data.historicalStats || { records: [] },
+    circuitBreaker: data.circuitBreaker || {
+      retryCounters: {},
+      lastDispatchAt: {},
+      reviewedKeys: [],
+      fixedKeys: [],
+      batchIndex: {},
+    },
     dryRun: data.dryRun || data.settings?.dryRun || false,
     lastPolled: data.lastPolled,
     currentUser: data.currentUser,
@@ -244,6 +266,10 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
     api: {
       ...DEFAULT_EXTENSIONS.api,
       ...(parsedExt.api || {}),
+    },
+    agents: {
+      ...DEFAULT_EXTENSIONS.agents,
+      ...(parsedExt.agents || {}),
     },
   };
 
@@ -343,6 +369,34 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       };
     }
 
+    let circuitBreaker: CircuitBreakerState = {
+      retryCounters: {},
+      lastDispatchAt: {},
+      reviewedKeys: [],
+      fixedKeys: [],
+      batchIndex: {},
+    };
+    if (parsed.circuitBreaker && typeof parsed.circuitBreaker === 'object') {
+      const cbObj = parsed.circuitBreaker as Record<string, unknown>;
+      circuitBreaker = {
+        retryCounters: (cbObj.retryCounters && typeof cbObj.retryCounters === 'object')
+          ? (cbObj.retryCounters as Record<string, number>)
+          : {},
+        lastDispatchAt: (cbObj.lastDispatchAt && typeof cbObj.lastDispatchAt === 'object')
+          ? (cbObj.lastDispatchAt as Record<string, number>)
+          : {},
+        reviewedKeys: Array.isArray(cbObj.reviewedKeys)
+          ? cbObj.reviewedKeys.filter((k): k is string => typeof k === 'string')
+          : [],
+        fixedKeys: Array.isArray(cbObj.fixedKeys)
+          ? cbObj.fixedKeys.filter((k): k is string => typeof k === 'string')
+          : [],
+        batchIndex: (cbObj.batchIndex && typeof cbObj.batchIndex === 'object')
+          ? (cbObj.batchIndex as Record<string, number>)
+          : {},
+      };
+    }
+
     return {
       settings,
       extensions,
@@ -356,6 +410,7 @@ export function loadState(customPath?: string, cwd: string = process.cwd()): App
       teamMembers,
       teamProfiles,
       historicalStats,
+      circuitBreaker,
       dryRun: settings.dryRun,
       lastPolled: typeof parsed.lastPolled === 'number' ? parsed.lastPolled : undefined,
       currentUser: typeof parsed.currentUser === 'string' ? parsed.currentUser : undefined,

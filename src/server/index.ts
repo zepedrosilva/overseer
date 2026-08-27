@@ -22,11 +22,6 @@ export interface SSEClient {
   response: http.ServerResponse;
 }
 
-export interface StartApiServerOptions {
-  port?: number;
-  token?: string;
-}
-
 export interface ApiServerController {
   server: http.Server;
   port: number;
@@ -61,11 +56,9 @@ export function prStateToApiResponse(pr: PrState): ApiPrResponse {
 
 export function startApiServer(
   data: AppState,
-  optionsOrPort: number | StartApiServerOptions = DEFAULT_API_PORT,
+  port: number = DEFAULT_API_PORT,
   onAction?: ApiActionHandler
 ): ApiServerController {
-  const port = typeof optionsOrPort === 'number' ? optionsOrPort : optionsOrPort.port ?? DEFAULT_API_PORT;
-  const configuredToken = typeof optionsOrPort === 'object' ? optionsOrPort.token : process.env.OVERSEER_API_TOKEN;
   let sseClients: SSEClient[] = [];
 
   function broadcast(type: string, payload: unknown): void {
@@ -217,19 +210,6 @@ export function startApiServer(
 
     // ── POST /actions/:action or POST /action/:type ───────────────────────
     if (req.method === 'POST' && (pathname.startsWith('/actions/') || pathname.startsWith('/action/'))) {
-      if (configuredToken) {
-        const authHeader = req.headers.authorization;
-        const xTokenHeader = req.headers['x-overseer-token'];
-        const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
-        const providedToken = bearerToken || (typeof xTokenHeader === 'string' ? xTokenHeader.trim() : undefined);
-
-        if (!providedToken || providedToken !== configuredToken) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized: missing or invalid API token' }));
-          return;
-        }
-      }
-
       const rawAction = pathname.split('/').pop() as string;
       const validActions: ApiActionType[] = ['poll', 'recheck', 'merge', 'close', 'comment', 'agent', 'cancel-agent', 'open', 'backfill'];
       if (!validActions.includes(rawAction as ApiActionType)) {
@@ -255,7 +235,17 @@ export function startApiServer(
       req.on('end', () => {
         if (isTooLarge) return;
 
-        const body: { id?: string; prompt?: string; comment?: string; text?: string; agentName?: string; playbookName?: string } = {};
+        const body: {
+          id?: string;
+          prompt?: string;
+          comment?: string;
+          text?: string;
+          agentName?: string;
+          playbookName?: string;
+          timeframeDays?: number;
+          days?: number;
+          forceRefresh?: boolean;
+        } = {};
         try {
           if (dataStr) {
             Object.assign(body, JSON.parse(dataStr));
@@ -287,8 +277,9 @@ export function startApiServer(
             text: body.text || body.comment,
             agentName: body.agentName,
             playbookName: body.playbookName,
-            trigger: 'api',
-            source: 'api',
+            timeframeDays: body.timeframeDays,
+            days: body.days,
+            forceRefresh: body.forceRefresh,
           });
         }
 

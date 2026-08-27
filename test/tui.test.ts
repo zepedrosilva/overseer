@@ -402,8 +402,9 @@ describe('TUI Components & Engine', () => {
       const footer = renderFooter({ mode: 'NORMAL', selectedPR: null, inputBuffer: '' }, 40);
       expect(visualLength(footer)).toBe(38);
       const text = stripAnsi(footer);
+      expect(text).toContain('[↑/↓]');
       expect(text).toContain('[Enter]');
-      expect(text).toContain('[Tab]');
+      expect(text).not.toContain('[Tab]');
     });
 
     it('renders confirmation modals for merge and close', () => {
