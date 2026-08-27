@@ -52,6 +52,7 @@ export interface RenderScopeTabBarOptions {
   mineCount: number;
   teamCount: number;
   agentsCount?: number;
+  runningAgentsCount?: number;
   hasRunningAgent?: boolean;
   agentsEnabled?: boolean;
   teamMembersCount?: number;
@@ -65,7 +66,7 @@ export function renderScopeTabBar(options: RenderScopeTabBarOptions): string {
     scope,
     mineCount,
     teamCount,
-    agentsCount = 0,
+    runningAgentsCount,
     hasRunningAgent,
     agentsEnabled = true,
     spinnerTick,
@@ -88,20 +89,23 @@ export function renderScopeTabBar(options: RenderScopeTabBarOptions): string {
   }
 
   const isAgents = scope === 'agents';
+  const isRunning = Boolean(hasRunningAgent || (runningAgentsCount && runningAgentsCount > 0));
   let agentsDot: string;
 
-  if (hasRunningAgent) {
+  if (isRunning) {
     const spinner = getSpinnerChar(spinnerTick);
-    const color = isAgents ? rgbColor(colors.green) : rgbColor(colors.fgDim);
-    agentsDot = `\x1B[${color}${spinner}\x1B[0m`;
+    agentsDot = `\x1B[1;36m${spinner}\x1B[0m`;
   } else {
     agentsDot = isAgents
       ? `\x1B[${rgbColor(colors.green)}●\x1B[0m`
       : `\x1B[${rgbColor(colors.fgDim)}○\x1B[0m`;
   }
 
+  const runningCount = runningAgentsCount ?? 0;
+  const runningCountStr = runningCount > 1 ? ` (${runningCount})` : '';
+
   const agentsColor = isAgents ? '\x1B[1;37m' : `\x1B[${rgbColor(colors.fgDim)}`;
-  const agentsBadge = `${agentsDot} \x1B[${rgbColor(colors.cyan)}[3]\x1B[0m ${agentsColor}Agents (${agentsCount})\x1B[0m`;
+  const agentsBadge = `${agentsDot} \x1B[${rgbColor(colors.cyan)}[3]\x1B[0m ${agentsColor}Agents${runningCountStr}\x1B[0m`;
 
   const leftText = `  \x1B[${rgbColor(colors.fgDim)}[Tab / t]\x1B[0m  ${mineBadge}    ${teamBadge}    ${agentsBadge}`;
   return padEndVisual(leftText, width);

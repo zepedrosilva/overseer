@@ -362,7 +362,7 @@ export function createTUI(
           scope: data.viewScope || 'mine',
           mineCount,
           teamCount,
-          agentsCount,
+          runningAgentsCount: activeRunningWorkers.length,
           hasRunningAgent,
           agentsEnabled: isAgentsEnabled,
           teamMembersCount: data.teamMembers?.length,

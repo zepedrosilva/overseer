@@ -217,7 +217,7 @@ describe('Agents Tab & Session Stream Engine', () => {
       scope: 'agents',
       mineCount: 4,
       teamCount: 18,
-      agentsCount: 3,
+      runningAgentsCount: 3,
       hasRunningAgent: true,
       width: 100,
     });
@@ -228,43 +228,45 @@ describe('Agents Tab & Session Stream Engine', () => {
     expect(plain).toContain('[3] Agents (3)');
   });
 
-  it('renders pulsating spinner with grey color when inactive and green when active', () => {
-    // Inactive with running agent (grey spinner)
+  it('renders pulsating spinner when running and clean dot when idle', () => {
+    // Inactive with running agent
     const inactiveRunning = renderScopeTabBar({
       scope: 'mine',
       mineCount: 4,
       teamCount: 18,
-      agentsCount: 2,
+      runningAgentsCount: 2,
       hasRunningAgent: true,
       spinnerTick: 0,
       width: 100,
     });
-    // Inactive running spinner is colored with fgDim
     expect(inactiveRunning).toContain('⠋');
     expect(stripAnsi(inactiveRunning)).toContain('[1] Mine (4)');
+    expect(stripAnsi(inactiveRunning)).toContain('[3] Agents (2)');
 
-    // Active with running agent (green spinner)
+    // Active with running agent (1 running, no count needed)
     const activeRunning = renderScopeTabBar({
       scope: 'agents',
       mineCount: 4,
       teamCount: 18,
-      agentsCount: 2,
+      runningAgentsCount: 1,
       hasRunningAgent: true,
       spinnerTick: 0,
       width: 100,
     });
     expect(activeRunning).toContain('⠋');
+    expect(stripAnsi(activeRunning)).toContain('[3] Agents');
 
-    // Active idle (green solid dot)
+    // Active idle (no number)
     const activeIdle = renderScopeTabBar({
       scope: 'agents',
       mineCount: 4,
       teamCount: 18,
-      agentsCount: 2,
+      runningAgentsCount: 0,
       hasRunningAgent: false,
       width: 100,
     });
     expect(activeIdle).toContain('●');
+    expect(stripAnsi(activeIdle)).toContain('[3] Agents');
   });
 
   it('omits Agents tab when agentsEnabled is false (stealth mode)', () => {
