@@ -25,7 +25,7 @@ export const LOGO_GRADIENT_COLORS = [
 export const EYE_SCAN_FRAMES = ['◉', '◎', '●', '○'];
 
 export function getEyeScanChar(tick: number = 0): string {
-  return EYE_SCAN_FRAMES[Math.abs(tick) % EYE_SCAN_FRAMES.length];
+  return EYE_SCAN_FRAMES[Math.floor(Math.abs(tick) / 2) % EYE_SCAN_FRAMES.length];
 }
 
 export interface BannerOptions {
@@ -129,7 +129,7 @@ export function renderStatsBar(
 
   const separator = '  ';
   const visibleParts: string[] = [];
-  let usedLen = 6; // leading spaces + eye icon
+  let usedLen = 4; // leading spaces (2) + eye icon and space (2)
 
   for (const part of candidateParts) {
     const partLen = visualLength(part) + 2; // part visual length + 2 spaces separator

@@ -9,7 +9,7 @@ import {
 } from '../src/tui/layout.js';
 import { filterPRs, renderSearchBar } from '../src/tui/search.js';
 import { rgbColor } from '../src/tui/colors.js';
-import { renderBanner, renderStatsBar, renderDivider, LOGO_GRADIENT_COLORS } from '../src/tui/banner.js';
+import { renderBanner, renderStatsBar, renderDivider, LOGO_GRADIENT_COLORS, getEyeScanChar } from '../src/tui/banner.js';
 import { renderTable } from '../src/tui/table.js';
 import { renderDetails, renderDetailsModal } from '../src/tui/details.js';
 import { renderSettingsModal } from '../src/tui/settings.js';
@@ -667,13 +667,23 @@ describe('TUI Components & Engine', () => {
       }
     });
 
-    it('renders animated eye radar scanner in stats bar', () => {
+    it('renders animated eye radar scanner in stats bar and paces getEyeScanChar at 1.25 cycles/s', () => {
+      expect(getEyeScanChar(0)).toBe('◉');
+      expect(getEyeScanChar(1)).toBe('◉');
+      expect(getEyeScanChar(2)).toBe('◎');
+      expect(getEyeScanChar(3)).toBe('◎');
+      expect(getEyeScanChar(4)).toBe('●');
+      expect(getEyeScanChar(5)).toBe('●');
+      expect(getEyeScanChar(6)).toBe('○');
+      expect(getEyeScanChar(7)).toBe('○');
+      expect(getEyeScanChar(8)).toBe('◉');
+
       const state = createEmptyState();
       const statsIdle = renderStatsBar(state, 120, { spinnerTick: 0 });
       expect(statsIdle).toContain('◉');
 
       state.isPolling = true;
-      const statsPolling = renderStatsBar(state, 120, { spinnerTick: 1 });
+      const statsPolling = renderStatsBar(state, 120, { spinnerTick: 2 });
       expect(statsPolling).toContain('◎');
     });
 
@@ -812,6 +822,31 @@ describe('TUI Components & Engine', () => {
         width: 120,
       });
       expect(barLines).toEqual([]);
+    });
+
+    it('shows 0s for workers started less than 1 second ago', () => {
+      const prKey: PrState['key'] = { owner: 'acme-corp', repo: 'web-frontend', number: 142 };
+      const worker: WorkerHandle = {
+        sessionId: 'sess-1',
+        prKey,
+        agentName: 'agy',
+        playbookName: 'address-comments',
+        driver: 'local',
+        mode: 'live',
+        startedAt: Date.now(),
+        status: 'running',
+      };
+
+      const barLines = renderDockedWorkersBar({
+        workers: [worker],
+        selectedPrKey: prKey,
+        width: 120,
+        spinnerTick: 0,
+      });
+
+      expect(barLines).toHaveLength(1);
+      const text = stripAnsi(barLines[0]);
+      expect(text).toContain('(0s)');
     });
   });
 });

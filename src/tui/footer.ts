@@ -35,7 +35,7 @@ export function renderDockedWorkersBar(options: DockedWorkersBarOptions): string
       selectedPrKey.number === w.prKey.number);
 
     const prStr = `${w.prKey.repo}#${w.prKey.number}`;
-    const elapsedSecs = Math.max(1, Math.round((Date.now() - (w.startedAt || Date.now())) / 1000));
+    const elapsedSecs = Math.max(0, Math.round((Date.now() - (w.startedAt || Date.now())) / 1000));
     const timeStr = elapsedSecs >= 60
       ? `${Math.floor(elapsedSecs / 60)}m ${elapsedSecs % 60}s`
       : `${elapsedSecs}s`;
