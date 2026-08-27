@@ -1,4 +1,4 @@
-import type { PrState, WorkerHandle, RepoPolicyConfig } from '../app/types.js';
+import type { PrState, WorkerHandle, RepoPolicyConfig, PrOverallStatus } from '../app/types.js';
 import { prKeyToString } from '../app/types.js';
 import { formatReviewBadge } from '../watcher/evaluator.js';
 import {
@@ -29,6 +29,29 @@ export interface RenderTableOptions {
 type TableItem =
   | { type: 'header'; owner: string; count: number }
   | { type: 'pr'; pr: PrState; originalIndex: number };
+
+export function formatStatusLabel(status: PrOverallStatus): string {
+  switch (status) {
+    case 'Ready':
+      return 'Ready ';
+    case 'ChangesRequested':
+      return 'ReqChg';
+    case 'CiFailing':
+      return 'CiFail';
+    case 'CiPending':
+      return 'In CI ';
+    case 'Reviewing':
+      return 'InRevw';
+    case 'Draft':
+      return 'Draft ';
+    case 'Merged':
+      return 'Merged';
+    case 'Closed':
+      return 'Closed';
+    default:
+      return ((status as string) || '').slice(0, 6).padEnd(6);
+  }
+}
 
 export function renderTable(options: RenderTableOptions): string[] {
   const { prs, selectedIndex, width, height, scope, currentUser } = options;
@@ -175,7 +198,7 @@ export function renderTable(options: RenderTableOptions): string[] {
     const isDryRunWorker = Boolean(worker && worker.status === 'dry-run');
 
     let sIcon = statusIcon(pr.overallStatus);
-    let sName = pr.overallStatus.slice(0, 6).padEnd(6);
+    let sName = formatStatusLabel(pr.overallStatus);
     let sc = rgbColor(statusColor(pr.overallStatus));
 
     if (isWorkerRunning) {
