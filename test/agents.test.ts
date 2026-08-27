@@ -8,6 +8,7 @@ import {
   parseShellArgs,
   getSpawnExecution,
   resolveWorktreeDir,
+  derivePushUrl,
   cleanupWorktree,
   cleanupPRLogs,
   cleanupPRArtifacts,
@@ -315,7 +316,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const wtPath = resolveWorktreeDir(config, pr, tmpDir);
+      const wtPath = resolveWorktreeDir(config, pr, { cwd: tmpDir });
       expect(wtPath).toBe(path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142'));
     });
 
@@ -329,9 +330,9 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const claudePath = resolveWorktreeDir(config, pr, 'claude', 'preflight-review', tmpDir);
-      const agyFixPath = resolveWorktreeDir(config, pr, 'agy', 'address-comments', tmpDir);
-      const agyCiPath = resolveWorktreeDir(config, pr, 'agy', 'ci-repair', tmpDir);
+      const claudePath = resolveWorktreeDir(config, pr, { agentName: 'claude', playbookName: 'preflight-review', cwd: tmpDir });
+      const agyFixPath = resolveWorktreeDir(config, pr, { agentName: 'agy', playbookName: 'address-comments', cwd: tmpDir });
+      const agyCiPath = resolveWorktreeDir(config, pr, { agentName: 'agy', playbookName: 'ci-repair', cwd: tmpDir });
 
       expect(claudePath).toBe(
         path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-claude-preflight-review')
@@ -344,6 +345,28 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       );
       expect(claudePath).not.toBe(agyFixPath);
       expect(agyFixPath).not.toBe(agyCiPath);
+    });
+
+    it('does not confuse slashes in agent or playbook names with cwd', () => {
+      const pr = createMockPR();
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        defaults: {
+          ...DEFAULT_CONFIG.defaults,
+          worktrees_dir: './.overseer/worktrees',
+        },
+      };
+
+      const customPath = resolveWorktreeDir(config, pr, {
+        agentName: 'custom/agent',
+        playbookName: 'fix/review-comments',
+        cwd: tmpDir,
+      });
+
+      // Slashes should be stripped/sanitized from folder name and not change effective cwd
+      expect(customPath).toBe(
+        path.join(tmpDir, '.overseer', 'worktrees', 'acme-corp-web-frontend-142-customagent-fixreview-comments')
+      );
     });
 
     it('cleans up worktree directory without throwing', () => {
@@ -366,7 +389,7 @@ describe('AI Agent Dispatcher & Worktrees', () => {
         },
       };
 
-      const wtPath = resolveWorktreeDir(config, pr, tmpDir);
+      const wtPath = resolveWorktreeDir(config, pr, { cwd: tmpDir });
       fs.mkdirSync(wtPath, { recursive: true });
       fs.writeFileSync(path.join(wtPath, 'test.txt'), 'code');
 
@@ -382,6 +405,38 @@ describe('AI Agent Dispatcher & Worktrees', () => {
 
       expect(fs.existsSync(wtPath)).toBe(false);
       expect(fs.existsSync(logFile)).toBe(false);
+    });
+  });
+
+  describe('derivePushUrl & GitHub Enterprise support', () => {
+    it('preserves GitHub Enterprise HTTPS origin host and protocol', () => {
+      const enterpriseUrl = derivePushUrl('https://github.corp.internal/old-owner/old-repo.git', 'acme', 'repo-1');
+      expect(enterpriseUrl).toBe('https://github.corp.internal/acme/repo-1.git');
+    });
+
+    it('preserves GitHub Enterprise HTTPS origin host with custom port', () => {
+      const portUrl = derivePushUrl('https://ghe.local:8443/team/project.git', 'acme', 'repo-1');
+      expect(portUrl).toBe('https://ghe.local:8443/acme/repo-1.git');
+    });
+
+    it('preserves GitHub Enterprise SCP-style SSH origin host', () => {
+      const sshUrl = derivePushUrl('git@github.enterprise.com:org/some-repo.git', 'acme', 'repo-1');
+      expect(sshUrl).toBe('git@github.enterprise.com:acme/repo-1.git');
+    });
+
+    it('preserves GitHub Enterprise ssh:// origin with custom port', () => {
+      const sshPortUrl = derivePushUrl('ssh://git@ghe.internal.net:2222/org/some-repo.git', 'acme', 'repo-1');
+      expect(sshPortUrl).toBe('ssh://git@ghe.internal.net:2222/acme/repo-1.git');
+    });
+
+    it('handles standard github.com HTTPS and SSH URLs accurately', () => {
+      expect(derivePushUrl('https://github.com/someone/somerepo.git', 'acme', 'web')).toBe('https://github.com/acme/web.git');
+      expect(derivePushUrl('git@github.com:someone/somerepo.git', 'acme', 'web')).toBe('git@github.com:acme/web.git');
+    });
+
+    it('falls back to https://github.com/owner/repo.git on invalid or empty parent url', () => {
+      expect(derivePushUrl(undefined, 'acme', 'web')).toBe('https://github.com/acme/web.git');
+      expect(derivePushUrl('', 'acme', 'web')).toBe('https://github.com/acme/web.git');
     });
   });
 
@@ -533,6 +588,53 @@ describe('AI Agent Dispatcher & Worktrees', () => {
       expect(logContent).toContain('DRY-RUN SIMULATION: sim');
       expect(logContent).toContain('END SIMULATION');
       expect(logContent).not.toContain('┌─');
+    });
+
+    it('stages only tracked files with git add -u and verifies branch during auto-commit', async () => {
+      const state = createEmptyState();
+      const pr = createMockPR();
+      upsertPR(state, pr);
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        agents: {
+          fixer: {
+            command: 'node -e "const fs = require(\'fs\'); fs.writeFileSync(\'tracked.txt\', \'modified\'); fs.writeFileSync(\'untracked-junk.log\', \'junk\');"',
+            description: 'Fixer agent',
+          },
+        },
+      };
+
+      const wtPath = resolveWorktreeDir(config, pr, { agentName: 'fixer', playbookName: 'address-comments', cwd: tmpDir });
+      fs.mkdirSync(wtPath, { recursive: true });
+
+      const { execFileSync } = await import('node:child_process');
+      execFileSync('git', ['init', '-b', pr.branch], { cwd: wtPath });
+      execFileSync('git', ['config', 'user.name', 'Overseer Bot'], { cwd: wtPath });
+      execFileSync('git', ['config', 'user.email', 'bot@overseer.local'], { cwd: wtPath });
+      fs.writeFileSync(path.join(wtPath, 'tracked.txt'), 'initial');
+      execFileSync('git', ['add', 'tracked.txt'], { cwd: wtPath });
+      execFileSync('git', ['commit', '-m', 'initial commit'], { cwd: wtPath });
+
+      const worker = await dispatchAgent({
+        data: state,
+        pr,
+        config,
+        agentName: 'fixer',
+        playbookName: 'address-comments',
+        cwd: tmpDir,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(worker.status).toBe('completed');
+
+      // Verify tracked.txt was committed
+      const logOut = execFileSync('git', ['log', '-1', '--format=%s'], { cwd: wtPath }).toString();
+      expect(logOut.trim()).toBe('fix: address address-comments feedback');
+
+      // Verify untracked-junk.log was NOT staged or committed
+      const statusOut = execFileSync('git', ['status', '--porcelain'], { cwd: wtPath }).toString();
+      expect(statusOut).toContain('?? untracked-junk.log');
     });
   });
 });

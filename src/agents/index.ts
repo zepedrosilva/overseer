@@ -23,12 +23,14 @@ import { getAgentDefinition } from '../config.js';
 import { appendLog, setWorker, saveState, getRepoAgent, getRepoMode, loadAgentsConfig } from '../app/state.js';
 import {
   resolveWorktreeDir,
+  derivePushUrl,
   provisionWorktree,
   cleanupWorktree,
   resolveLogPath,
   cleanupPRLogs,
   cleanupPRArtifacts,
 } from './worktree.js';
+import type { ResolveWorktreeOptions, ProvisionWorktreeOptions } from './worktree.js';
 import { DEFAULT_AGENT_PROMPT } from './presets.js';
 import { getPlaybookDefinition } from './playbooks.js';
 import { recordAgentExecution } from './stats.js';
@@ -305,7 +307,11 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
   }
 
   const basePrompt = options.prompt || playbookDef.promptTemplate;
-  const worktreePath = resolveWorktreeDir(config, pr, agentName, playbookName, cwd);
+  const worktreePath = resolveWorktreeDir(config, pr, {
+    agentName,
+    playbookName,
+    cwd,
+  });
 
   const { command, definition, promptText } = buildAgentCommand(
     agentName,
@@ -695,9 +701,41 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
     // For mutable playbooks, commit and push any uncommitted edits or unpushed commits on clean exit
     if (code === 0 && !playbookDef.readOnly && playbookName !== 'preflight-review') {
       try {
-        const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
-        if (statusOut.trim().length > 0) {
-          await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+        // Verify worktree HEAD is on pr.branch before staging, committing, or pushing
+        let currentBranch = '';
+        try {
+          const { stdout: branchOut } = await execFileAsync('git', ['branch', '--show-current'], { cwd: worktreePath });
+          currentBranch = branchOut.trim();
+        } catch {
+          try {
+            const { stdout: symRefOut } = await execFileAsync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: worktreePath });
+            currentBranch = symRefOut.trim();
+          } catch {
+            currentBranch = '';
+          }
+        }
+
+        if (currentBranch !== pr.branch) {
+          // If HEAD is detached or on another branch (e.g. from gh pr checkout fallback), attempt to checkout pr.branch
+          try {
+            await execFileAsync('git', ['checkout', pr.branch], { cwd: worktreePath });
+            currentBranch = pr.branch;
+          } catch {
+            try {
+              await execFileAsync('git', ['checkout', '-B', pr.branch], { cwd: worktreePath });
+              currentBranch = pr.branch;
+            } catch (checkoutErr) {
+              throw new Error(
+                `Worktree HEAD is on '${currentBranch || 'detached HEAD'}', expected branch '${pr.branch}'. Failed to checkout '${pr.branch}': ${(checkoutErr as Error).message}`
+              );
+            }
+          }
+        }
+
+        // Stage modified and deleted tracked files (git add -u) to avoid sweeping in untracked junk dropped in worktree
+        await execFileAsync('git', ['add', '-u'], { cwd: worktreePath });
+        const { stdout: stagedOut } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: worktreePath });
+        if (stagedOut.trim().length > 0) {
           await execFileAsync('git', ['commit', '-m', `fix: address ${playbookName} feedback`], { cwd: worktreePath });
         }
 
@@ -713,7 +751,7 @@ export async function dispatchAgent(options: DispatchOptions): Promise<WorkerHan
         }
 
         if (shouldPush) {
-          await execFileAsync('git', ['push', 'origin', pr.branch], { cwd: worktreePath });
+          await execFileAsync('git', ['push', '--force-with-lease', 'origin', pr.branch], { cwd: worktreePath });
           appendLog(data, pr.key, `Fixer agent pushed fixes to branch '${pr.branch}'`);
           try {
             if (logStream && !logStream.destroyed) {
@@ -837,9 +875,11 @@ export function cancelWorker(data: AppState, prKey: PrKey, cwd?: string): boolea
 
 export {
   resolveWorktreeDir,
+  derivePushUrl,
   provisionWorktree,
   cleanupWorktree,
   resolveLogPath,
   cleanupPRLogs,
   cleanupPRArtifacts,
 };
+export type { ResolveWorktreeOptions, ProvisionWorktreeOptions } from './worktree.js';
